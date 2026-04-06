@@ -140,5 +140,5 @@ def main() -> None:
     spark.sql(f"SELECT SIZE(embedding) AS embedding_dim FROM {out_fqn} LIMIT 1").show()
 
 
-if __name__ == "__main__":
-    main()
+# Databricks notebook / job runs this file with a name other than __main__; always execute.
+main()

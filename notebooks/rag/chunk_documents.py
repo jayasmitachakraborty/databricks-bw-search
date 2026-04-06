@@ -91,5 +91,5 @@ def main() -> None:
     spark.sql(f"SELECT COUNT(*) AS n_chunks, COUNT(DISTINCT company_id) AS n_companies FROM {out_name}").show()
 
 
-if __name__ == "__main__":
-    main()
+# Databricks notebook / job runs this file with a name other than __main__; always execute.
+main()
