@@ -1,4 +1,4 @@
-CREATE OR REPLACE TABLE 02_silver.bw_pitchbook_company_all_investors AS
+CREATE OR REPLACE TABLE bw_ai_search.`02_silver`.bw_pitchbook_company_all_investors AS
 SELECT
   mt.company_id,
   STRING_AGG(DISTINCT i.investor_name, ', ') AS all_investors
