@@ -1,0 +1,13 @@
+# Embeddings + vector search (adjust for your workspace).
+
+embedding:
+  # Model serving endpoint name (Foundation Model API / custom embedding endpoint).
+  endpoint: databricks-bge-large-en
+  batch_size: 32
+
+tables:
+  chunks: bw_ai_search.02_silver.bw_company_text_chunks
+  embeddings: bw_ai_search.02_silver.bw_company_text_chunk_embeddings
+
+# Optional: Vector Search index name / endpoint when you wire retrieval.
+vector_index: {}

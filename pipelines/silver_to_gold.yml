@@ -1,0 +1,4 @@
+# Pipeline: silver → gold
+
+name: silver_to_gold
+tasks: []

@@ -1,0 +1,3 @@
+-- Example thin view over a Fivetran-replicated table (optional pattern).
+-- CREATE OR REPLACE VIEW `${catalog}`.`${schema}_views`.`example` AS
+-- SELECT * FROM `${catalog}`.`${schema}`.`example_raw`;

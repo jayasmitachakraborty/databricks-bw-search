@@ -1,0 +1,11 @@
+# Databricks asset bundle / dbt-style source definitions (adapt to your tooling).
+# Example structure — replace with real schemas and tables.
+
+version: 2
+
+sources:
+  - name: fivetran_bronze
+    database: "{{ env_var('BRONZE_CATALOG', 'bronze') }}"
+    schema: "{{ env_var('BRONZE_SCHEMA', 'fivetran') }}"
+    tables: []
+      # - name: example_connector__table_name

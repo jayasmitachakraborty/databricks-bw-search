@@ -1,0 +1,27 @@
+# Paths or tables that feed the chunking + embedding pipeline.
+
+sources:
+  - name: websites_parsed_text
+    kind: unity_catalog_table
+    table: bw_ai_search.websites.parsed_text
+    text_column: website_parsed_text
+
+  - name: company_semantic_text
+    kind: unity_catalog_table
+    table: bw_ai_search.02_silver.bw_company_semantic_text
+    text_column: semantic_text
+    id_column: company_id
+
+  - name: company_text_chunks
+    kind: unity_catalog_table
+    table: bw_ai_search.02_silver.bw_company_text_chunks
+    text_column: chunk_text
+    id_column: chunk_id
+    parent_id_column: company_id
+
+  - name: company_text_chunk_embeddings
+    kind: unity_catalog_table
+    table: bw_ai_search.02_silver.bw_company_text_chunk_embeddings
+    id_column: chunk_id
+    parent_id_column: company_id
+    embedding_column: embedding

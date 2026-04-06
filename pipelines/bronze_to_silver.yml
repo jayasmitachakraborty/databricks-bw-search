@@ -1,0 +1,5 @@
+# Pipeline: bronze → silver
+# Define tasks (notebook, SQL file, dbt, Delta Live Tables, etc.) for your stack.
+
+name: bronze_to_silver
+tasks: []

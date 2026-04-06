@@ -1,0 +1,4 @@
+# Databricks job definitions (bundle or export format — customize to your deployment).
+# Reference task YAMLs: bronze_to_silver, silver_to_gold, docs_to_vector_index.
+
+jobs: []

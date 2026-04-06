@@ -1,0 +1,4 @@
+# Pipeline: document ingestion → vector index (RAG)
+
+name: docs_to_vector_index
+tasks: []
