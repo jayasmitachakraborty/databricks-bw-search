@@ -1,9 +1,4 @@
 # Databricks notebook source
-# MAGIC %md
-# Embeddings from `bw_company_text_chunks`
-# Reads **`bw_ai_search`.`02_silver`.bw_company_text_chunks**, calls a Databricks **embedding serving endpoint**
-# (MLflow `get_deploy_client("databricks").predict`), writes **`bw_ai_search`.`02_silver`.bw_company_text_chunk_embeddings`.
-# **Setup:** Set **`DATABRICKS_EMBEDDING_ENDPOINT`** to your serving endpoint. Executors use **`mlflow`** only (no repo path required).
 
 from __future__ import annotations
 
@@ -152,5 +147,7 @@ def main() -> None:
     spark.sql(f"SELECT SIZE(embedding) AS embedding_dim FROM {fq} LIMIT 1").show()
 
 
-# Databricks notebook / job runs this file with a name other than __main__; always execute.
+'''
+Databricks notebook / job runs this file with a name other than __main__; always execute.
+'''
 main()

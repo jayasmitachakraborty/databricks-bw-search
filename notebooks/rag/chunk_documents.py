@@ -1,8 +1,5 @@
 # Databricks notebook source
-# MAGIC %md
-# Chunk company semantic text (Unity Catalog)
-# Reads **`bw_ai_search`.`02_silver`.bw_company_semantic_text** (`semantic_text`), writes one row per chunk to **`bw_ai_search`.`02_silver`.bw_company_text_chunks`** with `chunk_id`, `company_id`, `chunk_index`, `chunk_text`.
-# Add **`ai/src`** to the cluster **PYTHONPATH** (or install this repo) so executors can import `chunking`.
+
 
 import os
 import sys
@@ -37,7 +34,9 @@ SOURCE_TABLE = "bw_company_semantic_text"
 TEXT_COL = "semantic_text"
 OUTPUT_TABLE = "bw_company_text_chunks"
 
-# Match embedding context window / retrieval preference (see ai/src/chunking.py).
+'''
+Match embedding context window / retrieval preference (see ai/src/chunking.py).
+'''
 CHUNK_MAX_CHARS = 2500
 CHUNK_OVERLAP = 300
 
@@ -108,5 +107,7 @@ def main() -> None:
     ).show()
 
 
-# Databricks notebook / job runs this file with a name other than __main__; always execute.
+'''
+Databricks notebook / job runs this file with a name other than __main__; always execute.
+'''
 main()

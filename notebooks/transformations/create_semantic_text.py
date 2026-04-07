@@ -104,5 +104,7 @@ def main() -> None:
     print("Data quality check passed: distinct company_id counts match.")
 
 
-# Databricks notebook / job runs this file with a name other than __main__; always execute.
+'''
+Databricks notebook / job runs this file with a name other than __main__; always execute.
+'''
 main()
