@@ -1,12 +1,4 @@
 # Databricks notebook source
-# MAGIC %md
-# MAGIC Build `bw_ai_search`.`02_silver`.bw_company_semantic_text`
-# MAGIC Runs `silver/sql/02_silver/company_semantic_text.sql`, then runs the data-quality script
-# MAGIC validate_bw_company_semantic_text_company_count.sql` and **fails** if distinct `company_id`
-# MAGIC counts do not match market trends.
-# MAGIC Set **`REPO_ROOT`** if SQL files are not found from the driver cwd.
-
-# MAGIC %python
 
 import os
 
