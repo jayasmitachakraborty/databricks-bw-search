@@ -42,16 +42,32 @@ CHUNK_MAX_CHARS = 2500
 CHUNK_OVERLAP = 300
 
 
+def _require_table(catalog: str, schema: str, table: str) -> None:
+    fq = f"`{catalog}`.`{schema}`.`{table}`"
+    if not spark.catalog.tableExists(f"{catalog}.{schema}.{table}"):
+        raise RuntimeError(
+            f"Upstream table missing: {fq}. "
+            "Run the upstream task that creates it, or verify catalog/schema permissions."
+        )
+
+
 def main() -> None:
     # Numeric schema name: set session catalog/schema so saveAsTable(table) lands in 02_silver.
     spark.sql(f"USE CATALOG {CATALOG}")
     spark.sql(f"USE SCHEMA `{SCHEMA}`")
+
+    _require_table(CATALOG, SCHEMA, SOURCE_TABLE)
 
     df = spark.table(SOURCE_TABLE).where(
         F.col("company_id").isNotNull()
         & F.col(TEXT_COL).isNotNull()
         & (F.length(F.trim(F.col(TEXT_COL))) > 0)
     )
+
+    if df.limit(1).count() == 0:
+        raise RuntimeError(
+            f"Upstream table `{CATALOG}`.`{SCHEMA}`.`{SOURCE_TABLE}` exists but has no rows with non-empty {TEXT_COL}."
+        )
 
     @F.udf(ArrayType(StringType()))
     def chunk_udf(t: str | None) -> list[str]:

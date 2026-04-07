@@ -24,6 +24,15 @@ EMBED_BATCH_SIZE = int(os.environ.get("EMBED_BATCH_SIZE", "32"))
 EMBED_NUM_PARTITIONS = int(os.environ.get("EMBED_NUM_PARTITIONS", "8"))
 
 
+def _require_table(catalog: str, schema: str, table: str) -> None:
+    fq = f"`{catalog}`.`{schema}`.`{table}`"
+    if not spark.catalog.tableExists(f"{catalog}.{schema}.{table}"):
+        raise RuntimeError(
+            f"Upstream table missing: {fq}. "
+            "Run the upstream chunking task that creates it."
+        )
+
+
 def _parse_embedding_response(resp: Any) -> list[list[float]]:
     if resp is None:
         return []
@@ -74,11 +83,18 @@ def main() -> None:
     spark.sql(f"USE CATALOG {CATALOG}")
     spark.sql(f"USE SCHEMA `{SCHEMA}`")
 
+    _require_table(CATALOG, SCHEMA, CHUNKS_TABLE)
+
     df = (
         spark.table(CHUNKS_TABLE)
         .where(F.col("chunk_id").isNotNull() & F.col("chunk_text").isNotNull())
         .select("chunk_id", "company_id", "chunk_index", "chunk_text")
     )
+
+    if df.limit(1).count() == 0:
+        raise RuntimeError(
+            f"Upstream table `{CATALOG}`.`{SCHEMA}`.`{CHUNKS_TABLE}` exists but has no rows to embed."
+        )
 
     endpoint = EMBEDDING_ENDPOINT
     batch_size = EMBED_BATCH_SIZE
