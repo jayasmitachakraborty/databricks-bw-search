@@ -24,10 +24,6 @@ EMBED_BATCH_SIZE = int(os.environ.get("EMBED_BATCH_SIZE", "32"))
 EMBED_NUM_PARTITIONS = int(os.environ.get("EMBED_NUM_PARTITIONS", "8"))
 
 
-def _table(catalog: str, schema: str, name: str) -> str:
-    return f"`{catalog}`.`{schema}`.`{name}`"
-
-
 def _parse_embedding_response(resp: Any) -> list[list[float]]:
     if resp is None:
         return []
@@ -75,11 +71,11 @@ def _embed_texts_batches(texts: list[str], endpoint: str, batch_size: int) -> li
 
 
 def main() -> None:
-    chunks_fqn = _table(CATALOG, SCHEMA, CHUNKS_TABLE)
-    out_fqn = _table(CATALOG, SCHEMA, EMBEDDINGS_TABLE)
+    spark.sql(f"USE CATALOG {CATALOG}")
+    spark.sql(f"USE SCHEMA `{SCHEMA}`")
 
     df = (
-        spark.table(chunks_fqn)
+        spark.table(CHUNKS_TABLE)
         .where(F.col("chunk_id").isNotNull() & F.col("chunk_text").isNotNull())
         .select("chunk_id", "company_id", "chunk_index", "chunk_text")
     )
@@ -126,7 +122,7 @@ def main() -> None:
     embedded = df.repartition(n_parts).mapInPandas(embed_partition, schema=schema_out)
     embedded = embedded.withColumn("embedded_at", F.current_timestamp())
 
-    embedded.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(out_fqn)
+    embedded.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(EMBEDDINGS_TABLE)
 
     preview = embedded.select(
         "chunk_id", "company_id", "chunk_index", "embedding_endpoint", "embedded_at"
@@ -136,8 +132,9 @@ def main() -> None:
     except NameError:
         preview.show(truncate=80)
 
-    spark.sql(f"SELECT COUNT(*) AS n_rows, COUNT(DISTINCT chunk_id) AS n_chunks FROM {out_fqn}").show()
-    spark.sql(f"SELECT SIZE(embedding) AS embedding_dim FROM {out_fqn} LIMIT 1").show()
+    fq = f"`{CATALOG}`.`{SCHEMA}`.`{EMBEDDINGS_TABLE}`"
+    spark.sql(f"SELECT COUNT(*) AS n_rows, COUNT(DISTINCT chunk_id) AS n_chunks FROM {fq}").show()
+    spark.sql(f"SELECT SIZE(embedding) AS embedding_dim FROM {fq} LIMIT 1").show()
 
 
 # Databricks notebook / job runs this file with a name other than __main__; always execute.

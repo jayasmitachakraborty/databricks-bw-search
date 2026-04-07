@@ -42,13 +42,12 @@ CHUNK_MAX_CHARS = 2500
 CHUNK_OVERLAP = 300
 
 
-def _table(catalog: str, schema: str, name: str) -> str:
-    return f"`{catalog}`.`{schema}`.`{name}`"
-
-
 def main() -> None:
-    source = _table(CATALOG, SCHEMA, SOURCE_TABLE)
-    df = spark.table(source).where(
+    # Numeric schema name: set session catalog/schema so saveAsTable(table) lands in 02_silver.
+    spark.sql(f"USE CATALOG {CATALOG}")
+    spark.sql(f"USE SCHEMA `{SCHEMA}`")
+
+    df = spark.table(SOURCE_TABLE).where(
         F.col("company_id").isNotNull()
         & F.col(TEXT_COL).isNotNull()
         & (F.length(F.trim(F.col(TEXT_COL))) > 0)
@@ -79,8 +78,7 @@ def main() -> None:
 
     out_df = with_ids.select("chunk_id", "company_id", "chunk_index", "chunk_text")
 
-    out_name = _table(CATALOG, SCHEMA, OUTPUT_TABLE)
-    out_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(out_name)
+    out_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(OUTPUT_TABLE)
 
     preview = out_df.limit(50)
     try:
@@ -88,7 +86,10 @@ def main() -> None:
     except NameError:
         preview.show(50, truncate=80)
 
-    spark.sql(f"SELECT COUNT(*) AS n_chunks, COUNT(DISTINCT company_id) AS n_companies FROM {out_name}").show()
+    spark.sql(
+        f"SELECT COUNT(*) AS n_chunks, COUNT(DISTINCT company_id) AS n_companies "
+        f"FROM `{CATALOG}`.`{SCHEMA}`.`{OUTPUT_TABLE}`"
+    ).show()
 
 
 # Databricks notebook / job runs this file with a name other than __main__; always execute.

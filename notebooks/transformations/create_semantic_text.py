@@ -8,17 +8,34 @@
 
 import os
 
-try:
-    NOTEBOOK_DIR = os.path.dirname(os.path.abspath(__file__))
-except NameError:
-    NOTEBOOK_DIR = os.getcwd()
-DEFAULT_REPO_ROOT = os.path.abspath(os.path.join(NOTEBOOK_DIR, "..", ".."))
-REPO_ROOT = os.environ.get("REPO_ROOT", DEFAULT_REPO_ROOT)
-
 SEMANTIC_SQL_REL = os.path.join("silver", "sql", "02_silver", "company_semantic_text.sql")
 VALIDATE_SQL_REL = os.path.join("silver", "sql", "02_silver", "validate_bw_company_semantic_text_company_count.sql")
-SEMANTIC_SQL_PATH = os.path.join(REPO_ROOT, SEMANTIC_SQL_REL)
-VALIDATE_SQL_PATH = os.path.join(REPO_ROOT, VALIDATE_SQL_REL)
+
+
+def _find_repo_root() -> str:
+    """Resolve repo root for SQL files (Jobs often have wrong getcwd(); __file__ may be missing)."""
+    env = os.environ.get("REPO_ROOT")
+    if env:
+        root = os.path.abspath(env)
+        if os.path.isfile(os.path.join(root, SEMANTIC_SQL_REL)):
+            return root
+    try:
+        start = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        start = os.getcwd()
+    d = start
+    for _ in range(12):
+        root = os.path.abspath(d)
+        if os.path.isfile(os.path.join(root, SEMANTIC_SQL_REL)):
+            return root
+        parent = os.path.dirname(root)
+        if parent == root:
+            break
+        d = parent
+    raise FileNotFoundError(
+        f"Could not find {SEMANTIC_SQL_REL} starting from {start!r}. "
+        "Set env REPO_ROOT to the clone root (folder that contains silver/sql/)."
+    )
 
 DQ_CHECK_NAME = "bw_company_semantic_text_company_id_count"
 SEMANTIC_TABLE = "`bw_ai_search`.`02_silver`.bw_company_semantic_text"
@@ -74,14 +91,19 @@ def _assert_company_id_counts_match() -> None:
 
 
 def main() -> None:
-    semantic_ddl = _read_sql(SEMANTIC_SQL_PATH)
+    root = _find_repo_root()
+    print(f"create_semantic_text: repo root = {root}")
+    semantic_sql_path = os.path.join(root, SEMANTIC_SQL_REL)
+    validate_sql_path = os.path.join(root, VALIDATE_SQL_REL)
+
+    semantic_ddl = _read_sql(semantic_sql_path)
     spark.sql(semantic_ddl)
 
     spark.sql(
         f"SELECT COUNT(*) AS n, SUM(LENGTH(semantic_text)) AS total_chars FROM {SEMANTIC_TABLE}"
     ).show()
 
-    validate_sql = _read_sql(VALIDATE_SQL_PATH)
+    validate_sql = _read_sql(validate_sql_path)
     _run_validate_sql_script(validate_sql)
     _assert_company_id_counts_match()
 
