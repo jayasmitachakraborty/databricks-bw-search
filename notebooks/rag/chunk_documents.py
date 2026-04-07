@@ -1,4 +1,11 @@
 # Databricks notebook source
+# MAGIC %md
+# MAGIC - Chunk company semantic text (Unity Catalog)
+# MAGIC - Reads **`bw_ai_search`.`02_silver`.bw_company_semantic_text** (`semantic_text`), writes one row per chunk to **`bw_ai_search`.`02_silver`.bw_company_text_chunks`** with `chunk_id`, `company_id`, `chunk_index`, `chunk_text`.
+# MAGIC - Add **`ai/src`** to the cluster **PYTHONPATH** (or install this repo) so executors can import `chunking`.
+# MAGIC
+
+# COMMAND ----------
 
 
 import os
