@@ -20,9 +20,26 @@ SCHEMA = "02_silver"
 CHUNKS_TABLE = "bw_company_text_chunks"
 EMBEDDINGS_TABLE = "bw_company_text_chunk_embeddings"
 
-EMBEDDING_ENDPOINT = os.environ.get("DATABRICKS_EMBEDDING_ENDPOINT", "databricks-bge-large-en")
-EMBED_BATCH_SIZE = int(os.environ.get("EMBED_BATCH_SIZE", "32"))
-EMBED_NUM_PARTITIONS = int(os.environ.get("EMBED_NUM_PARTITIONS", "8"))
+def _get_widget(name: str) -> str | None:
+    try:
+        return dbutils.widgets.get(name)  # type: ignore[name-defined]
+    except Exception:
+        return None
+
+
+def _get_param(name: str, default: str) -> str:
+    v = os.environ.get(name)
+    if v is not None and str(v).strip() != "":
+        return str(v).strip()
+    w = _get_widget(name)
+    if w is not None and str(w).strip() != "":
+        return str(w).strip()
+    return default
+
+
+EMBEDDING_ENDPOINT = _get_param("DATABRICKS_EMBEDDING_ENDPOINT", "databricks-bge-large-en")
+EMBED_BATCH_SIZE = int(_get_param("EMBED_BATCH_SIZE", "32"))
+EMBED_NUM_PARTITIONS = int(_get_param("EMBED_NUM_PARTITIONS", "8"))
 
 
 def _require_table(catalog: str, schema: str, table: str) -> None:

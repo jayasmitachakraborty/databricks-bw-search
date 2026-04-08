@@ -13,10 +13,26 @@ import os
 SEMANTIC_SQL_REL = os.path.join("silver", "sql", "02_silver", "company_semantic_text.sql")
 VALIDATE_SQL_REL = os.path.join("silver", "sql", "02_silver", "validate_bw_company_semantic_text_company_count.sql")
 
+def _get_widget(name: str) -> str | None:
+    try:
+        return dbutils.widgets.get(name)  # type: ignore[name-defined]
+    except Exception:
+        return None
+
+
+def _get_param(name: str) -> str | None:
+    v = os.environ.get(name)
+    if v is not None and str(v).strip() != "":
+        return str(v).strip()
+    w = _get_widget(name)
+    if w is not None and str(w).strip() != "":
+        return str(w).strip()
+    return None
+
 
 def _find_repo_root() -> str:
     """Resolve repo root for SQL files (Jobs often have wrong getcwd(); __file__ may be missing)."""
-    env = os.environ.get("REPO_ROOT")
+    env = _get_param("REPO_ROOT")
     if env:
         root = os.path.abspath(env)
         if os.path.isfile(os.path.join(root, SEMANTIC_SQL_REL)):

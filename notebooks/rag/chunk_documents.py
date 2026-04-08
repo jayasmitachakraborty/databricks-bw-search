@@ -41,11 +41,27 @@ SOURCE_TABLE = "bw_company_semantic_text"
 TEXT_COL = "semantic_text"
 OUTPUT_TABLE = "bw_company_text_chunks"
 
+def _get_widget(name: str) -> str | None:
+    try:
+        return dbutils.widgets.get(name)  # type: ignore[name-defined]
+    except Exception:
+        return None
+
+
+def _get_param(name: str, default: str) -> str:
+    v = os.environ.get(name)
+    if v is not None and str(v).strip() != "":
+        return str(v).strip()
+    w = _get_widget(name)
+    if w is not None and str(w).strip() != "":
+        return str(w).strip()
+    return default
+
 '''
 Match embedding context window / retrieval preference (see ai/src/chunking.py).
 '''
-CHUNK_MAX_CHARS = 2500
-CHUNK_OVERLAP = 300
+CHUNK_MAX_CHARS = int(_get_param("CHUNK_MAX_CHARS", "2500"))
+CHUNK_OVERLAP = int(_get_param("CHUNK_OVERLAP", "300"))
 
 
 def _require_table(catalog: str, schema: str, table: str) -> None:
