@@ -1,11 +1,46 @@
-# Databricks asset bundle / dbt-style source definitions (adapt to your tooling).
-# Example structure — replace with real schemas and tables.
+# Source inventory for the bronze layer (adapt to your tooling).
+# This file is "dbt-style" but is also useful as a lightweight contract for what
+# Fivetran should land into Unity Catalog.
+#
+# Convention in this repo:
+# - catalog: bw_ai_search
+# - bronze schemas: _01_bronze_<source>
 
 version: 2
 
 sources:
-  - name: fivetran_bronze
-    database: "{{ env_var('BRONZE_CATALOG', 'bronze') }}"
-    schema: "{{ env_var('BRONZE_SCHEMA', 'fivetran') }}"
-    tables: []
-      # - name: example_connector__table_name
+  # Azure MySQL (relational) replicated by Fivetran
+  - name: pitchbook_mysql
+    database: "{{ env_var('UC_CATALOG', 'bw_ai_search') }}"
+    schema: "{{ env_var('BRONZE_PITCHBOOK_SCHEMA', '_01_bronze_pitchbook') }}"
+    tables:
+      - name: companies
+      - name: company_verticals
+      - name: company_keywords
+      - name: deals_investors
+      - name: investors
+
+  # Azure Cosmos DB replicated by Fivetran (example: websites container)
+  - name: cosmos_websites
+    database: "{{ env_var('UC_CATALOG', 'bw_ai_search') }}"
+    schema: "{{ env_var('BRONZE_COSMOS_WEBSITES_SCHEMA', '_01_bronze_cosmos_websites') }}"
+    tables:
+      # expected columns used downstream:
+      # - id (maps to company_id)
+      # - website_parsed_text
+      # - website_summary
+      - name: parsed_text
+
+  # Market trends / dashboard bronze (deal_id + company_id)
+  - name: bw_dashboard
+    database: "{{ env_var('UC_CATALOG', 'bw_ai_search') }}"
+    schema: "{{ env_var('BRONZE_BW_DASHBOARD_SCHEMA', '_01_bronze_bw_dashboard') }}"
+    tables:
+      - name: bw_market_trends_anlzd
+
+  # Taxonomy mapping replicated by Fivetran
+  - name: taxonomy
+    database: "{{ env_var('UC_CATALOG', 'bw_ai_search') }}"
+    schema: "{{ env_var('BRONZE_TAXONOMY_SCHEMA', '_01_bronze_taxonomy') }}"
+    tables:
+      - name: noa_taxonomy

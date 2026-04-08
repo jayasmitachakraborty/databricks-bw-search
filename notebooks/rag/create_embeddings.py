@@ -4,6 +4,7 @@
 # MAGIC - Reads **`bw_ai_search`.`02_silver`.bw_company_text_chunks**, calls a Databricks **embedding serving endpoint**
 # MAGIC - (MLflow `get_deploy_client("databricks").predict`), writes **`bw_ai_search`.`02_silver`.bw_company_text_chunk_embeddings`**.
 # MAGIC - **Setup:** Set **`DATABRICKS_EMBEDDING_ENDPOINT`** to your serving endpoint. Executors use **`mlflow`** only (no repo path required).
+# MAGIC - **OOM:** Raise **`EMBED_NUM_PARTITIONS`**, lower **`ARROW_MAX_RECORDS_PER_BATCH`** / **`EMBED_PANDAS_MAX_ROWS`**, or reduce **`EMBED_BATCH_SIZE`**.
 
 # COMMAND ----------
 
@@ -39,7 +40,12 @@ def _get_param(name: str, default: str) -> str:
 
 EMBEDDING_ENDPOINT = _get_param("DATABRICKS_EMBEDDING_ENDPOINT", "databricks-bge-large-en")
 EMBED_BATCH_SIZE = int(_get_param("EMBED_BATCH_SIZE", "32"))
-EMBED_NUM_PARTITIONS = int(_get_param("EMBED_NUM_PARTITIONS", "8"))
+# More partitions = smaller Arrow batches per worker (reduces Python OOM on large chunk tables).
+EMBED_NUM_PARTITIONS = int(_get_param("EMBED_NUM_PARTITIONS", "32"))
+# Max rows per Arrow batch delivered to mapInPandas (lower = less peak RAM per worker).
+ARROW_MAX_RECORDS_PER_BATCH = int(_get_param("ARROW_MAX_RECORDS_PER_BATCH", "500"))
+# Max rows inside one pandas sub-batch before yielding (caps vectors + DataFrame size in RAM).
+EMBED_PANDAS_MAX_ROWS = int(_get_param("EMBED_PANDAS_MAX_ROWS", "2000"))
 
 
 def _require_table(catalog: str, schema: str, table: str) -> None:
@@ -117,6 +123,11 @@ def main() -> None:
     endpoint = EMBEDDING_ENDPOINT
     batch_size = EMBED_BATCH_SIZE
     n_parts = max(1, EMBED_NUM_PARTITIONS)
+    pandas_max_rows = max(100, EMBED_PANDAS_MAX_ROWS)
+    arrow_batch = max(50, ARROW_MAX_RECORDS_PER_BATCH)
+
+    # Smaller Arrow batches → smaller pandas chunks in mapInPandas (avoids Python worker OOM).
+    spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", str(arrow_batch))
 
     schema_out = StructType(
         [
@@ -134,33 +145,40 @@ def main() -> None:
         for pdf in iterator:
             if pdf.empty:
                 continue
-            chunk_ids = pdf["chunk_id"].astype(str).tolist()
-            company_ids = [None if pd.isna(x) else str(x) for x in pdf["company_id"].tolist()]
-            chunk_indices = pdf["chunk_index"].fillna(0).astype(int).tolist()
-            texts = pdf["chunk_text"].fillna("").astype(str).tolist()
-            n = len(texts)
-            all_vecs = _embed_texts_batches(texts, endpoint, batch_size)
-            if len(all_vecs) != n:
-                raise RuntimeError(f"Expected {n} embeddings, got {len(all_vecs)}")
-            out = pd.DataFrame(
-                {
-                    "chunk_id": chunk_ids,
-                    "company_id": company_ids,
-                    "chunk_index": chunk_indices,
-                    "embedding": all_vecs,
-                    "embedding_endpoint": [endpoint] * n,
-                }
-            )
-            yield out
+            # Process each Arrow batch in row slices so we never hold all embeddings for
+            # a huge batch in memory at once.
+            for start in range(0, len(pdf), pandas_max_rows):
+                sub = pdf.iloc[start : start + pandas_max_rows]
+                chunk_ids = sub["chunk_id"].astype(str).tolist()
+                company_ids = [None if pd.isna(x) else str(x) for x in sub["company_id"].tolist()]
+                chunk_indices = sub["chunk_index"].fillna(0).astype(int).tolist()
+                texts = sub["chunk_text"].fillna("").astype(str).tolist()
+                n = len(texts)
+                all_vecs = _embed_texts_batches(texts, endpoint, batch_size)
+                if len(all_vecs) != n:
+                    raise RuntimeError(f"Expected {n} embeddings, got {len(all_vecs)}")
+                out = pd.DataFrame(
+                    {
+                        "chunk_id": chunk_ids,
+                        "company_id": company_ids,
+                        "chunk_index": chunk_indices,
+                        "embedding": all_vecs,
+                        "embedding_endpoint": [endpoint] * n,
+                    }
+                )
+                yield out
 
     embedded = df.repartition(n_parts).mapInPandas(embed_partition, schema=schema_out)
     embedded = embedded.withColumn("embedded_at", F.current_timestamp())
 
     embedded.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(EMBEDDINGS_TABLE)
 
-    preview = embedded.select(
-        "chunk_id", "company_id", "chunk_index", "embedding_endpoint", "embedded_at"
-    ).limit(20)
+    # Read from the table so we don't re-trigger the heavy mapInPandas plan for preview.
+    preview = (
+        spark.table(EMBEDDINGS_TABLE)
+        .select("chunk_id", "company_id", "chunk_index", "embedding_endpoint", "embedded_at")
+        .limit(20)
+    )
     try:
         display(preview)  # type: ignore[name-defined]
     except NameError:
