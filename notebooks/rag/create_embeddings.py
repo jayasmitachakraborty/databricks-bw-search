@@ -127,7 +127,11 @@ def main() -> None:
     arrow_batch = max(50, ARROW_MAX_RECORDS_PER_BATCH)
 
     # Smaller Arrow batches → smaller pandas chunks in mapInPandas (avoids Python worker OOM).
-    spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", str(arrow_batch))
+    # Not settable on some compute (e.g. serverless); EMBED_PANDAS_MAX_ROWS still caps per-batch RAM.
+    try:
+        spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", str(arrow_batch))
+    except Exception:
+        pass
 
     schema_out = StructType(
         [

@@ -10,4 +10,6 @@ tables:
   embeddings: bw_ai_search.02_silver.bw_company_text_chunk_embeddings
 
 # Optional: Vector Search index name / endpoint when you wire retrieval.
-vector_index: {}
+vector_index:
+  endpoint_name: your_vs_endpoint
+  index_name: bw_ai_search.02_silver.your_index_name
