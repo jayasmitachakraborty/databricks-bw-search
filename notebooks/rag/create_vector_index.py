@@ -4,7 +4,10 @@
 # MAGIC - **Prereq:** Endpoint (e.g. **`rag-hybrid-endpoint`**) must exist — run **`create_vector_search_endpoint`** first.
 # MAGIC - **`embedding_dimension`** must match the **`embedding`** column in the source table (default **1024** for `databricks-bge-large-en`; e.g. **1536** for some OpenAI models). Override with **`VECTOR_SEARCH_EMBEDDING_DIMENSION`**.
 # MAGIC - The REST/UI field **`text_column`** corresponds to **`embedding_source_column`** in the Python SDK.
-# MAGIC - Cluster libraries: **`databricks-vectorsearch`** if not on the image.
+# MAGIC - **Serverless / many runtimes:** the Vector Search SDK is not pre-installed. Run the next cell first (or add **`databricks-vectorsearch`** to the job environment). If the import still fails, run **`dbutils.library.restartPython()`** once after install, then run the rest of the notebook.
+
+# COMMAND ----------
+# MAGIC %pip install databricks-vectorsearch
 
 # COMMAND ----------
 

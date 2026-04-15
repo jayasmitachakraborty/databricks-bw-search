@@ -3,7 +3,10 @@
 # MAGIC - Ensures a **Mosaic AI Vector Search** serving endpoint exists in this workspace.
 # MAGIC - If **`rag-hybrid-endpoint`** (or **`VECTOR_SEARCH_ENDPOINT_NAME`**) is missing, creates it with **`STANDARD`** capacity; otherwise reuses the existing endpoint.
 # MAGIC - Prints **`STATUS=SUCCESS`** or **`STATUS=FAILURE`** for pipeline / job log filtering.
-# MAGIC - Cluster libraries: install **`databricks-vectorsearch`** if it is not on the image (e.g. one-time **`%pip install databricks-vectorsearch`**).
+# MAGIC - **Serverless / many runtimes:** install **`databricks-vectorsearch`** via the next cell (or add it to the job environment). If the import still fails, run **`dbutils.library.restartPython()`** once after install, then continue.
+
+# COMMAND ----------
+# MAGIC %pip install databricks-vectorsearch
 
 # COMMAND ----------
 
