@@ -1,22 +1,78 @@
-"""Retrieval pipeline for RAG (Databricks Vector Search + keyword search + fusion).
+"""End-to-end RAG pipeline.
 
-This module focuses on retrieval + context assembly. Generation/citations are downstream.
+Architecture:
+User query
+  ↓
+Query understanding:
+ - normalize text
+ - detect language
+ - detect query type
+ - rewrite/expansion (LLM) + extract metadata constraints
+  ↓
+Hybrid retrieval (Databricks Vector Search index)
+  ↓
+Top 50 results
+  ↓
+Reranker (LLM or cross-encoder)
+  ↓
+Top 5–10 chunks
+  ↓
+LLM answer (with citation)
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 
 DEFAULT_RESULT_COLUMNS = ("chunk_id", "company_id", "chunk_index", "chunk_text")
 DEFAULT_TEXT_COL = "chunk_text"
 DEFAULT_ID_COL = "chunk_id"
 DEFAULT_PARENT_COL = "company_id"
+
+DEFAULT_REWRITE_MODEL = os.environ.get("DATABRICKS_QUERY_UNDERSTANDING_ENDPOINT") or os.environ.get(
+    "DATABRICKS_LLM_ENDPOINT"
+)
+DEFAULT_RERANK_MODEL = os.environ.get( "DATABRICKS_RERANKER_ENDPOINT")
+DEFAULT_ANSWER_MODEL = os.environ.get("DATABRICKS_ANSWER_ENDPOINT") or os.environ.get("DATABRICKS_LLM_ENDPOINT")
+
+QUERY_UNDERSTANDING_PROMPT = """You are a query understanding system for a RAG search engine.
+
+Your job is to:
+1. Rewrite the query for better retrieval
+2. Extract structured filters for metadata search
+
+Schema:
+- country
+- city
+- region
+- theme
+- main_category
+- subcategory
+- deal_type
+- deal_year
+- funding_type (e.g. debt, equity)
+- investor_name
+
+Rules:
+- Only extract a field if explicitly or strongly implied
+- Use normalized values (e.g. "UK" → "United Kingdom")
+- Keep rewritten queries diverse (keyword + semantic)
+- Do NOT hallucinate filters
+
+Return JSON with:
+- "queries": list of 3–5 rewritten queries
+- "filters": object with extracted fields
+
+User query:
+"{query}"
+"""
 
 
 @dataclass(frozen=True)
@@ -25,8 +81,8 @@ class QueryInfo:
     normalized: str
     language: str  # best-effort: "en" | "unknown"
     query_type: str  # "fact" | "comparison" | "entity" | "broad"
-    constraints: dict[str, Any]
-    expanded: list[str]
+    rewritten_queries: list[str]
+    filters: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -34,7 +90,7 @@ class RetrievalResult:
     chunk_id: str
     payload: dict[str, Any]
     score: float
-    source: str  # "vector" | "keyword" | "hybrid" | "rerank"
+    source: str  # "hybrid" | "rerank"
     rank: int
 
 
@@ -86,7 +142,6 @@ def _merge_vs_settings(
 
 
 _SPACE_RE = re.compile(r"\s+")
-_CONSTRAINT_RE = re.compile(r"(?P<key>company_id|source|doc_id|parent_id)\s*:\s*(?P<val>[^\s]+)", re.I)
 
 
 def normalize_text(text: str) -> str:
@@ -118,45 +173,143 @@ def detect_query_type(text: str) -> str:
     return "broad"
 
 
-def extract_metadata_constraints(text: str) -> dict[str, Any]:
-    constraints: dict[str, Any] = {}
-    for m in _CONSTRAINT_RE.finditer(text or ""):
-        key = m.group("key").lower()
-        val = m.group("val")
-        if key in ("doc_id", "parent_id"):
-            constraints[key] = val
-        elif key == "company_id":
-            constraints["company_id"] = val
-        elif key == "source":
-            constraints["source"] = val
-    return constraints
+def _json_extract_loose(text: str) -> dict[str, Any] | None:
+    """
+    Best-effort JSON extractor for model outputs.
+
+    Accepts:
+    - raw JSON object
+    - fenced ```json ... ```
+    - text containing a single top-level JSON object
+    """
+    if not text:
+        return None
+    s = text.strip()
+    if s.startswith("```"):
+        # Strip a single fenced block, keeping its content.
+        s = re.sub(r"^\s*```[a-zA-Z0-9_-]*\s*", "", s)
+        s = re.sub(r"\s*```\s*$", "", s)
+        s = s.strip()
+    try:
+        obj = json.loads(s)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        pass
+
+    # Try to locate the first JSON object in the string.
+    start = s.find("{")
+    end = s.rfind("}")
+    if start >= 0 and end > start:
+        candidate = s[start : end + 1]
+        try:
+            obj = json.loads(candidate)
+            return obj if isinstance(obj, dict) else None
+        except Exception:
+            return None
+    return None
 
 
-def optional_expand_query(info: QueryInfo) -> list[str]:
-    # Keep it simple/deterministic: add a couple of variants for keyword retrieval.
-    q = info.normalized
-    if not q:
-        return []
-    variants = [q]
-    if info.query_type == "comparison" and " vs " in q.lower():
-        variants.append(q.replace(" vs ", " versus "))
-    return list(dict.fromkeys(variants))
+def _normalize_rewrite_payload(raw: Any) -> tuple[list[str], dict[str, Any]]:
+    """
+    Normalize model output into (queries, filters).
+    """
+    if raw is None:
+        return ([], {})
+    if isinstance(raw, dict):
+        queries = raw.get("queries")
+        filters = raw.get("filters")
+        q_out = [normalize_text(str(q)) for q in queries] if isinstance(queries, list) else []
+        q_out = [q for q in q_out if q]
+        f_out = filters if isinstance(filters, dict) else {}
+        return (q_out, f_out)
+    return ([], {})
+
+
+def _call_databricks_llm(endpoint: str, *, messages: list[dict[str, str]], temperature: float = 0.0) -> str:
+    """
+    Call a Databricks model serving chat endpoint via MLflow deployments client.
+
+    This intentionally supports multiple response shapes used by different serving backends.
+    """
+    from mlflow.deployments import get_deploy_client
+
+    client = get_deploy_client("databricks")
+    resp = client.predict(endpoint=endpoint, inputs={"messages": messages, "temperature": float(temperature)})
+
+    # Common shapes:
+    # - OpenAI-like: {"choices":[{"message":{"content":"..."}}], ...}
+    # - Predictions: {"predictions":[{"content":"..."}]} or {"predictions":["..."]}
+    # - Data: {"data":[...]}
+    if isinstance(resp, dict):
+        if isinstance(resp.get("choices"), list) and resp["choices"]:
+            msg = resp["choices"][0].get("message") if isinstance(resp["choices"][0], dict) else None
+            if isinstance(msg, dict) and isinstance(msg.get("content"), str):
+                return msg["content"]
+        preds = resp.get("predictions")
+        if isinstance(preds, list) and preds:
+            p0 = preds[0]
+            if isinstance(p0, dict) and isinstance(p0.get("content"), str):
+                return p0["content"]
+            if isinstance(p0, str):
+                return p0
+        data = resp.get("data")
+        if isinstance(data, list) and data:
+            d0 = data[0]
+            if isinstance(d0, dict) and isinstance(d0.get("content"), str):
+                return d0["content"]
+            if isinstance(d0, str):
+                return d0
+    if isinstance(resp, str):
+        return resp
+    return json.dumps(resp, ensure_ascii=False)
 
 
 def understand_query(query: str) -> QueryInfo:
     norm = normalize_text(query)
     lang = detect_language(norm)
     qtype = detect_query_type(norm)
-    constraints = extract_metadata_constraints(norm)
-    base = QueryInfo(
+    rewritten_queries: list[str] = []
+    filters: dict[str, Any] = {}
+
+    # LLM rewrite + metafilters (optional; falls back safely).
+    if DEFAULT_REWRITE_MODEL and norm:
+        prompt = QUERY_UNDERSTANDING_PROMPT.format(query=norm)
+        content = _call_databricks_llm(
+            DEFAULT_REWRITE_MODEL,
+            messages=[
+                {"role": "system", "content": "Return only valid JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+        )
+        parsed = _json_extract_loose(content)
+        q_out, f_out = _normalize_rewrite_payload(parsed)
+        rewritten_queries = q_out
+        filters = f_out
+
+    # Always include the normalized query as a backstop.
+    if norm:
+        rewritten_queries = [*rewritten_queries, norm]
+    # Dedupe while preserving order and bound to 5.
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for q in rewritten_queries:
+        qq = normalize_text(q)
+        if not qq or qq in seen:
+            continue
+        seen.add(qq)
+        deduped.append(qq)
+        if len(deduped) >= 5:
+            break
+
+    return QueryInfo(
         raw=query,
         normalized=norm,
         language=lang,
         query_type=qtype,
-        constraints=constraints,
-        expanded=[],
+        rewritten_queries=deduped,
+        filters=filters,
     )
-    return QueryInfo(**{**base.__dict__, "expanded": optional_expand_query(base)})
 
 
 def embed_query(
@@ -253,34 +406,26 @@ def _as_retrieval_results(
     return out
 
 
-def _rrf_fuse(
-    lists: list[list[RetrievalResult]],
+def _dedupe_by_id_keep_best(
+    results: list[RetrievalResult],
     *,
-    k: int = 60,
-    weights: dict[str, float] | None = None,
+    prefer_source: str | None = None,
 ) -> list[RetrievalResult]:
     """
-    Reciprocal Rank Fusion across multiple ranked lists.
-
-    Score: sum_s w_s * 1/(k + rank_s)
+    Dedupe results by chunk_id, keeping the highest score (tie-breaker: prefer_source).
     """
-    w = weights or {}
-    fused: dict[str, tuple[float, dict[str, Any]]] = {}
-    for lst in lists:
-        for r in lst:
-            ww = float(w.get(r.source, 1.0))
-            s = ww * (1.0 / float(k + max(1, r.rank)))
-            prev = fused.get(r.chunk_id)
-            if prev is None:
-                fused[r.chunk_id] = (s, dict(r.payload))
-            else:
-                fused[r.chunk_id] = (prev[0] + s, prev[1])
-
-    ranked = sorted(fused.items(), key=lambda kv: kv[1][0], reverse=True)
-    out: list[RetrievalResult] = []
-    for i, (cid, (score, payload)) in enumerate(ranked):
-        out.append(RetrievalResult(chunk_id=cid, payload=payload, score=score, source="fused", rank=i + 1))
-    return out
+    best: dict[str, RetrievalResult] = {}
+    for r in results:
+        prev = best.get(r.chunk_id)
+        if prev is None:
+            best[r.chunk_id] = r
+            continue
+        if r.score > prev.score:
+            best[r.chunk_id] = r
+        elif r.score == prev.score and prefer_source and r.source == prefer_source and prev.source != prefer_source:
+            best[r.chunk_id] = r
+    out = sorted(best.values(), key=lambda x: x.score, reverse=True)
+    return [RetrievalResult(**{**r.__dict__, "rank": i + 1}) for i, r in enumerate(out)]
 
 
 def _collapse_overlaps(
@@ -347,71 +492,106 @@ def _diversify(
     return out
 
 
-def keyword_search_chunks(
-    query: str,
-    *,
-    spark: Any | None = None,
-    table_fqn: str | None = None,
-    top_k: int = 50,
-    text_col: str = DEFAULT_TEXT_COL,
-    id_col: str = DEFAULT_ID_COL,
-    extra_cols: tuple[str, ...] = ("company_id", "chunk_index"),
-    constraints: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    """
-    Best-effort keyword retrieval over the chunks table.
-
-    Requires a SparkSession (pass ``spark=...``). If not available, returns [].
-    """
-    if spark is None or table_fqn is None:
-        return []
-    q = normalize_text(query)
-    if not q:
-        return []
-    terms = [t for t in re.split(r"[^A-Za-z0-9_]+", q.lower()) if len(t) >= 3]
-    if not terms:
-        return []
-
-    from pyspark.sql import functions as F
-
-    df = spark.table(table_fqn).select(id_col, text_col, *extra_cols)
-    c = constraints or {}
-    if "company_id" in c and "company_id" in df.columns:
-        df = df.where(F.col("company_id") == F.lit(str(c["company_id"])))
-
-    # Simple TF-ish score: sum of occurrences for each term (lowercased).
-    score = None
-    txt = F.lower(F.col(text_col))
-    for t in terms[:12]:
-        part = (F.length(txt) - F.length(F.regexp_replace(txt, re.escape(t), ""))) / F.lit(max(1, len(t)))
-        score = part if score is None else (score + part)
-    df = df.withColumn("keyword_score", score).where(F.col("keyword_score") > F.lit(0))
-    rows = df.orderBy(F.col("keyword_score").desc()).limit(int(top_k)).collect()
-    out: list[dict[str, Any]] = []
-    for r in rows:
-        d = r.asDict(recursive=True)
-        d["score"] = float(d.pop("keyword_score", 0.0))
-        out.append(d)
-    return out
-
-
-def maybe_rerank(
+def rerank_candidates(
     query: str,
     candidates: list[RetrievalResult],
     *,
-    columns_to_rerank: list[str] | None = None,
     top_n: int = 50,
+    rerank_top_k: int = 10,
+    rerank_model_endpoint: str | None = None,
+    text_col: str = DEFAULT_TEXT_COL,
 ) -> list[RetrievalResult]:
     """
-    Optional reranking for hybrid results.
+    Rerank the top-N candidates and return top rerank_top_k.
 
-    If available, uses DatabricksReranker via Vector Search SDK semantics (when present).
-    Otherwise returns candidates unchanged.
+    Strategy:
+    - If a rerank endpoint is provided, call it (assumed cross-encoder-like).
+    - Otherwise, fall back to an LLM scoring prompt if an answer model is configured.
+    - If neither is available, return the original ranking (truncated).
     """
-    _ = query
-    _ = columns_to_rerank
-    _ = top_n
-    return candidates
+    if not candidates:
+        return []
+
+    top_n = max(1, int(top_n))
+    rerank_top_k = max(1, int(rerank_top_k))
+    subset = candidates[:top_n]
+
+    ep = rerank_model_endpoint or DEFAULT_RERANK_MODEL
+    if ep:
+        # Best-effort: assume the reranker endpoint accepts {"query":..., "documents":[...]} and returns scores.
+        from mlflow.deployments import get_deploy_client
+
+        client = get_deploy_client("databricks")
+        docs = [normalize_text(_safe_str(r.payload.get(text_col))) for r in subset]
+        resp = client.predict(endpoint=ep, inputs={"query": query, "documents": docs})
+        scores: list[float] = []
+        if isinstance(resp, dict) and isinstance(resp.get("predictions"), list):
+            preds = resp["predictions"]
+            if preds and isinstance(preds[0], dict) and "score" in preds[0]:
+                scores = [float(p.get("score", 0.0)) for p in preds]
+            elif preds and isinstance(preds[0], (int, float)):
+                scores = [float(x) for x in preds]
+        elif isinstance(resp, list) and resp and isinstance(resp[0], (int, float)):
+            scores = [float(x) for x in resp]
+
+        if len(scores) == len(subset):
+            reranked = [
+                RetrievalResult(
+                    chunk_id=r.chunk_id,
+                    payload=r.payload,
+                    score=float(scores[i]),
+                    source="rerank",
+                    rank=i + 1,
+                )
+                for i, r in enumerate(subset)
+            ]
+            reranked = sorted(reranked, key=lambda x: x.score, reverse=True)
+            reranked = [RetrievalResult(**{**r.__dict__, "rank": i + 1}) for i, r in enumerate(reranked)]
+            return reranked[:rerank_top_k]
+
+    # LLM fallback scoring
+    if DEFAULT_ANSWER_MODEL:
+        prompt_lines = [
+            "Score each passage for relevance to the query on a 0-100 scale.",
+            "Return ONLY JSON: {\"scores\": [..]} with one score per passage in order.",
+            "",
+            f"Query: {query}",
+            "",
+        ]
+        for i, r in enumerate(subset, start=1):
+            txt = normalize_text(_safe_str(r.payload.get(text_col)))
+            txt = txt[:2500]  # safety bound
+            prompt_lines.append(f"Passage {i}:\n{txt}\n")
+        content = _call_databricks_llm(
+            DEFAULT_ANSWER_MODEL,
+            messages=[
+                {"role": "system", "content": "You are a careful ranking system."},
+                {"role": "user", "content": "\n".join(prompt_lines)},
+            ],
+            temperature=0.0,
+        )
+        parsed = _json_extract_loose(content) or {}
+        raw_scores = parsed.get("scores")
+        if isinstance(raw_scores, list) and len(raw_scores) == len(subset):
+            try:
+                scores = [float(x) for x in raw_scores]
+                reranked = [
+                    RetrievalResult(
+                        chunk_id=r.chunk_id,
+                        payload=r.payload,
+                        score=float(scores[i]),
+                        source="rerank",
+                        rank=i + 1,
+                    )
+                    for i, r in enumerate(subset)
+                ]
+                reranked = sorted(reranked, key=lambda x: x.score, reverse=True)
+                reranked = [RetrievalResult(**{**r.__dict__, "rank": i + 1}) for i, r in enumerate(reranked)]
+                return reranked[:rerank_top_k]
+            except Exception:
+                pass
+
+    return subset[:rerank_top_k]
 
 
 def retrieve(
@@ -493,49 +673,35 @@ def retrieve(
     return _normalize_similarity_hits(raw)
 
 
-def retrieve_pipeline(
-    query: str,
+def hybrid_retrieve_top50(
+    qi: QueryInfo,
     *,
-    top_k: int = 8,
-    vector_top_k: int = 40,
-    keyword_top_k: int = 40,
-    rrf_k: int = 60,
-    weights: dict[str, float] | None = None,
-    # Vector Search config:
     index_name: str | None = None,
     endpoint_name: str | None = None,
     columns: list[str] | None = None,
     query_type: str | None = None,
-    filters: dict[str, Any] | None = None,
     embedding_endpoint: str | None = None,
     use_query_vector: bool = False,
     config_path: Path | str | None = None,
-    # Keyword search config:
-    spark: Any | None = None,
-    chunks_table_fqn: str | None = None,
-    # Context assembly:
-    max_per_parent: int = 3,
-    collapse_per_parent: int = 6,
-) -> dict[str, Any]:
+    extra_filters: dict[str, Any] | None = None,
+    per_query_top_k: int = 50,
+) -> list[RetrievalResult]:
     """
-    End-to-end retrieval per the architecture:
-    understand → parallel retrieval → union/dedupe → fusion → (optional rerank) → context assembly.
+    Hybrid retrieval against the Databricks Vector Search index for each rewritten query.
 
-    Returns a dict with ``query_info`` and ``chunks`` (list of payload dicts).
+    Returns a single deduped ranked list of up to ~ (per_query_top_k * num_queries) candidates,
+    sorted by the index-provided score.
     """
-    qi = understand_query(query)
+    merged_filters = dict(extra_filters or {})
+    merged_filters.update(qi.filters or {})
 
-    # Metadata constraints: apply to both retrieval paths when possible.
-    merged_filters = dict(filters or {})
-    if "company_id" in qi.constraints and "company_id" not in merged_filters:
-        merged_filters["company_id"] = qi.constraints["company_id"]
-
-    # A) Vector / hybrid retrieval
-    vector_rows: list[dict[str, Any]] = []
-    try:
-        vector_rows = retrieve(
-            qi.normalized,
-            top_k=vector_top_k,
+    all_rows: list[dict[str, Any]] = []
+    for q in qi.rewritten_queries[:5] if qi.rewritten_queries else [qi.normalized]:
+        if not q:
+            continue
+        rows = retrieve(
+            q,
+            top_k=int(per_query_top_k),
             index_name=index_name,
             endpoint_name=endpoint_name,
             columns=columns,
@@ -545,38 +711,129 @@ def retrieve_pipeline(
             use_query_vector=use_query_vector,
             config_path=config_path,
         )
-    except Exception:
-        # Allow keyword-only mode in environments without vectorsearch.
-        vector_rows = []
+        # Preserve which rewrite produced it (useful for debugging)
+        for r in rows:
+            if isinstance(r, dict):
+                r.setdefault("_rewrite_query", q)
+        all_rows.extend(rows)
 
-    vector_results = _as_retrieval_results(vector_rows, source="vector")
+    results = _as_retrieval_results(all_rows, source="hybrid")
+    results = _dedupe_by_id_keep_best(results, prefer_source="hybrid")
+    return results
 
-    # B) Keyword retrieval over chunks table (Spark)
-    keyword_rows: list[dict[str, Any]] = []
-    if qi.expanded:
-        # take best of expanded variants by concatenating and letting RRF handle it
-        for qv in qi.expanded[:2]:
-            keyword_rows.extend(
-                keyword_search_chunks(
-                    qv,
-                    spark=spark,
-                    table_fqn=chunks_table_fqn,
-                    top_k=keyword_top_k,
-                    constraints=qi.constraints,
-                )
-            )
-    keyword_results = _as_retrieval_results(keyword_rows, source="keyword")
 
-    # Candidate union + fusion
-    fused = _rrf_fuse([vector_results, keyword_results], k=rrf_k, weights=weights or {"vector": 1.0, "keyword": 0.7})
+def answer_with_citations(
+    query: str,
+    chunks: list[dict[str, Any]],
+    *,
+    answer_model_endpoint: str | None = None,
+    text_col: str = DEFAULT_TEXT_COL,
+    id_col: str = DEFAULT_ID_COL,
+    max_context_chars: int = 14000,
+) -> str:
+    """
+    Produce a final answer that includes citations of the form [chunk_id].
+    """
+    ep = answer_model_endpoint or DEFAULT_ANSWER_MODEL
+    if not ep:
+        return ""
 
-    # Reranking (optional hook)
-    reranked = maybe_rerank(qi.normalized, fused)
+    context_blocks: list[str] = []
+    used = 0
+    for ch in chunks:
+        cid = normalize_text(_safe_str(ch.get(id_col) or ch.get("chunk_id") or ch.get("id"))) or "unknown"
+        txt = normalize_text(_safe_str(ch.get(text_col)))
+        if not txt:
+            continue
+        block = f"[{cid}]\n{txt}"
+        if used + len(block) > max_context_chars:
+            break
+        context_blocks.append(block)
+        used += len(block)
 
-    # Context assembly: collapse overlaps and diversify
+    prompt = "\n\n".join(
+        [
+            "Answer the question using ONLY the provided passages.",
+            "When you use a passage, cite it using its bracketed id like [chunk_id].",
+            "If the passages do not contain the answer, say you don't have enough information.",
+            "",
+            f"Question: {query}",
+            "",
+            "Passages:",
+            "\n\n".join(context_blocks) if context_blocks else "(none)",
+        ]
+    )
+
+    return _call_databricks_llm(
+        ep,
+        messages=[
+            {"role": "system", "content": "You are a careful RAG assistant that cites sources."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,
+    ).strip()
+
+
+def rag_pipeline(
+    query: str,
+    *,
+    # Retrieval config
+    index_name: str | None = None,
+    endpoint_name: str | None = None,
+    columns: list[str] | None = None,
+    query_type: str | None = None,
+    filters: dict[str, Any] | None = None,
+    embedding_endpoint: str | None = None,
+    use_query_vector: bool = False,
+    config_path: Path | str | None = None,
+    # Rerank config
+    rerank_top_n: int = 50,
+    rerank_top_k: int = 10,
+    rerank_model_endpoint: str | None = None,
+    # Context assembly
+    collapse_per_parent: int = 6,
+    max_per_parent: int = 3,
+    # Answer config
+    answer_model_endpoint: str | None = None,
+) -> dict[str, Any]:
+    """
+    End-to-end pipeline matching the requested architecture.
+    """
+    qi = understand_query(query)
+
+    # 1) Hybrid retrieval from index (candidates)
+    candidates = hybrid_retrieve_top50(
+        qi,
+        index_name=index_name,
+        endpoint_name=endpoint_name,
+        columns=columns,
+        query_type=query_type,
+        embedding_endpoint=embedding_endpoint,
+        use_query_vector=use_query_vector,
+        config_path=config_path,
+        extra_filters=filters,
+        per_query_top_k=50,
+    )
+
+    # 2) Rerank and select top 5–10 chunks
+    reranked = rerank_candidates(
+        qi.normalized,
+        candidates,
+        top_n=rerank_top_n,
+        rerank_top_k=rerank_top_k,
+        rerank_model_endpoint=rerank_model_endpoint,
+    )
+
     assembled = _collapse_overlaps(reranked, max_per_parent=collapse_per_parent)
     assembled = _diversify(assembled, max_per_parent=max_per_parent)
-    assembled = assembled[: max(1, int(top_k))]
+    final_chunks = assembled[: max(5, min(10, int(rerank_top_k)))]
+
+    # 3) Answer with citations
+    answer = answer_with_citations(
+        qi.normalized,
+        [r.payload for r in final_chunks],
+        answer_model_endpoint=answer_model_endpoint,
+    )
 
     return {
         "query_info": {
@@ -584,8 +841,17 @@ def retrieve_pipeline(
             "normalized": qi.normalized,
             "language": qi.language,
             "query_type": qi.query_type,
-            "constraints": qi.constraints,
-            "expanded": qi.expanded,
+            "rewritten_queries": qi.rewritten_queries,
+            "filters": qi.filters,
         },
-        "chunks": [r.payload for r in assembled],
+        "candidates_top50": [r.payload for r in candidates[:50]],
+        "chunks": [r.payload for r in final_chunks],
+        "answer": answer,
     }
+
+
+# Backwards-compatible alias (old name returned only chunks + query_info).
+def retrieve_pipeline(query: str, **kwargs: Any) -> dict[str, Any]:
+    out = rag_pipeline(query, **kwargs)
+    return {"query_info": out.get("query_info", {}), "chunks": out.get("chunks", [])}
+

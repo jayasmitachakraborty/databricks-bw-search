@@ -106,20 +106,33 @@ select
 
     concat_ws(
       ' ',
+      -- high importance (repeat 2-3x)
       coalesce(m.company_name, ''),
+
+      -- medium-low
       coalesce(m.theme, ''),
       coalesce(m.main_category, ''),
+
+      -- high importance (repeat 2-3x)
       coalesce(m.subcategory, ''),
+
+      -- low
       coalesce(m.noa_impact_framework, ''),
       coalesce(m.area, ''),
+
+      -- high importance (repeat 2-3x)
       coalesce(m.country, ''),
       coalesce(m.city, ''),
       coalesce(m.region, ''),
       coalesce(m.noa_funding_round, ''),
+
+      -- medium
       coalesce(m.deal_type, ''),
       coalesce(m.deal_type_2, ''),
       coalesce(v.verticals_text, ''),
       coalesce(k.keywords_text, ''),
+
+      -- base content
       coalesce(c.chunk_text, '')
     ) as search_text
 
