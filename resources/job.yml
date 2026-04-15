@@ -1,0 +1,71 @@
+resources:
+  jobs:
+    bw_search_vector_data_modelling_pipeline:
+      name: bw_search_vector_data_modelling_pipeline
+      tasks:
+        - task_key: bronze_to_silver_combine_all_investors
+          sql_task:
+            file:
+              path: /Workspace/Users/jayasmita@noavc.com/databricks-bw-search/silver/sql/02_silver/bw_combine_all_investors.sql
+              source: WORKSPACE
+            warehouse_id: 2ed857904977e888
+        - task_key: bronze_to_silver_investor_ranking
+          sql_task:
+            file:
+              path: /Workspace/Users/jayasmita@noavc.com/databricks-bw-search/silver/sql/02_silver/bw_search_silver_ranked_investors.sql
+              source: WORKSPACE
+            warehouse_id: 2ed857904977e888
+        - task_key: bronze_to_silver_semantic_text_table_creation
+          depends_on:
+            - task_key: bronze_to_silver_combine_all_investors
+            - task_key: bronze_to_silver_investor_ranking
+          notebook_task:
+            notebook_path: /Workspace/Users/jayasmita@noavc.com/databricks-bw-search/notebooks/transformations/create_semantic_text
+            source: WORKSPACE
+          environment_key: Default
+        - task_key: silver_chunking_table_create
+          depends_on:
+            - task_key: bronze_to_silver_semantic_text_table_creation
+          notebook_task:
+            notebook_path: /Workspace/Users/jayasmita@noavc.com/databricks-bw-search/notebooks/rag/chunk_documents
+            source: WORKSPACE
+          environment_key: Default
+        - task_key: silver_create_embeddings_table
+          depends_on:
+            - task_key: silver_chunking_table_create
+          notebook_task:
+            notebook_path: /Workspace/Users/jayasmita@noavc.com/databricks-bw-search/notebooks/rag/create_embeddings
+            source: WORKSPACE
+          environment_key: Default
+        - task_key: silver_to_gold_create_rag_company_table
+          depends_on:
+            - task_key: silver_create_embeddings_table
+          sql_task:
+            file:
+              path: /Workspace/Users/jayasmita@noavc.com/databricks-bw-search/gold/sql/bw_search_create_gold_rag_table.sql
+              source: WORKSPACE
+            warehouse_id: 2ed857904977e888
+      git_source:
+        git_url: https://github.com/jayasmitachakraborty/databricks-bw-search.git
+        git_provider: gitHub
+        git_branch: main
+      queue:
+        enabled: true
+      parameters:
+        - name: CHUNK_MAX_CHARS
+          default: "2500"
+        - name: CHUNK_OVERLAP
+          default: "300"
+        - name: DATABRICKS_EMBEDDING_ENDPOINT
+          default: bw-search-openai-embeddings
+        - name: EMBED_BATCH_SIZE
+          default: "32"
+        - name: EMBED_NUM_PARTITIONS
+          default: "8"
+        - name: REPO_ROOT
+          default: /Workspace/Users/jayasmita@noavc.com/databricks-bw-search
+      environments:
+        - environment_key: Default
+          spec:
+            environment_version: "5"
+      performance_target: PERFORMANCE_OPTIMIZED

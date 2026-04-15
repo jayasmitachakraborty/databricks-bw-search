@@ -1,0 +1,40 @@
+name: Deploy Databricks Bundle
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Bundle target (must exist in databricks.yml)"
+        required: true
+        default: "dev"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Databricks CLI
+        uses: databricks/setup-cli@v0.296.0
+
+      - name: Validate bundle
+        run: databricks bundle validate
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_BUNDLE_ENV: ${{ github.event.inputs.target || 'dev' }}
+
+      - name: Deploy bundle
+        run: databricks bundle deploy
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_BUNDLE_ENV: ${{ github.event.inputs.target || 'dev' }}
+
