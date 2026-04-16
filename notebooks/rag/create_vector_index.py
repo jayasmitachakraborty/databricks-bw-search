@@ -39,11 +39,33 @@ def _get_param_int(name: str, default: int) -> int:
     return int(_get_param(name, str(default)))
 
 
+def _derive_index_fqn(source_table_name: str, index_name: str) -> str:
+    """
+    Vector Search expects a Unity Catalog fully-qualified name: `catalog.schema.index`.
+    If `index_name` is already fully-qualified, return it; otherwise derive it from
+    the source table's `catalog.schema`.
+    """
+    idx_parts = [p for p in str(index_name).split(".") if p.strip() != ""]
+    if len(idx_parts) == 3:
+        return ".".join(idx_parts)
+
+    tbl_parts = [p for p in str(source_table_name).split(".") if p.strip() != ""]
+    if len(tbl_parts) < 3:
+        return index_name  # fall back; the API call will raise a helpful error
+
+    catalog, schema = tbl_parts[0], tbl_parts[1]
+    short_index = idx_parts[-1] if len(idx_parts) > 0 else "vector_search_index"
+    return f"{catalog}.{schema}.{short_index}"
+
+
 ENDPOINT_NAME = _get_param("VECTOR_SEARCH_ENDPOINT_NAME", "rag-hybrid-endpoint")
-INDEX_NAME = _get_param("VECTOR_SEARCH_INDEX_NAME", "bw_ai_search.gold_rag_company_chunks_index")
 SOURCE_TABLE_NAME = _get_param(
     "VECTOR_SEARCH_SOURCE_TABLE",
     "bw_ai_search.03_gold.gold_rag_company_chunks",
+)
+INDEX_NAME = _derive_index_fqn(
+    source_table_name=SOURCE_TABLE_NAME,
+    index_name=_get_param("VECTOR_SEARCH_INDEX_NAME", "gold_rag_company_chunks_index"),
 )
 PIPELINE_TYPE = _get_param("VECTOR_SEARCH_PIPELINE_TYPE", "TRIGGERED")
 EMBEDDING_DIMENSION = _get_param_int("VECTOR_SEARCH_EMBEDDING_DIMENSION", 1024)
