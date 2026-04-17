@@ -4,6 +4,10 @@
 # MAGIC Quick end-to-end check of **query understanding**, **hybrid retrieval**, and **reranking**.
 # MAGIC - Requires Databricks env / endpoints configured for **`ai/src/retrieval.py`** (same as production jobs).
 # MAGIC - Prepends **`ai/src`** so `from retrieval import …` works (via `__file__`, **`REPO_ROOT`**, or cwd).
+# MAGIC - **`pyyaml`** is required for `ai/config/vector_index.yml` to load; without it, set **`DATABRICKS_VECTOR_SEARCH_ENDPOINT_NAME`** and **`DATABRICKS_VECTOR_SEARCH_INDEX_NAME`**.
+
+# COMMAND ----------
+# MAGIC %pip install -q pyyaml
 
 # COMMAND ----------
 

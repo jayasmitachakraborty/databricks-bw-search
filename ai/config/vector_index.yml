@@ -9,7 +9,8 @@ tables:
   chunks: bw_ai_search.02_silver.bw_company_text_chunks
   embeddings: bw_ai_search.02_silver.bw_company_text_chunk_embeddings
 
-# Optional: Vector Search index name / endpoint when you wire retrieval.
+# Optional: Vector Search index / endpoint (override with DATABRICKS_VECTOR_SEARCH_* env vars).
+# Names match defaults in notebooks/rag/create_vector_index.py.
 vector_index:
-  endpoint_name: your_vs_endpoint
-  index_name: bw_ai_search.02_silver.your_index_name
+  endpoint_name: rag-hybrid-endpoint
+  index_name: bw_ai_search.03_gold.gold_rag_company_chunks_index
