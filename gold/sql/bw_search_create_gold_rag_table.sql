@@ -155,4 +155,5 @@ left join keywords_agg k
 left join investors_agg i
   on m.deal_id = i.deal_id
 
-where coalesce(m._fivetran_deleted, false) = false;
+where coalesce(m._fivetran_deleted, false) = false
+TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true');

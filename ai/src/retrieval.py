@@ -797,7 +797,7 @@ def rag_pipeline(
     answer_model_endpoint: str | None = None,
 ) -> dict[str, Any]:
     """
-    End-to-end pipeline matching the requested architecture.
+    End-to-end pipeline 
     """
     qi = understand_query(query)
 
