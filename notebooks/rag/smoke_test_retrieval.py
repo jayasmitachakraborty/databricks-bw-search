@@ -7,7 +7,12 @@
 # MAGIC - **`pyyaml`** is required for `ai/config/vector_index.yml` to load; without it, set **`DATABRICKS_VECTOR_SEARCH_ENDPOINT_NAME`** and **`DATABRICKS_VECTOR_SEARCH_INDEX_NAME`**.
 
 # COMMAND ----------
+
 # MAGIC %pip install -q pyyaml
+
+# COMMAND ----------
+
+dbutils.library.restartPython()
 
 # COMMAND ----------
 
@@ -41,19 +46,31 @@ def _ensure_ai_src_on_path() -> None:
             return
 
 
+# COMMAND ----------
+
+os.environ["DATABRICKS_QUERY_UNDERSTANDING_ENDPOINT"] = "bw-search-query-understanding"
+os.environ["DATABRICKS_LLM_ENDPOINT"] = "bw-search-llm"
+os.environ["DATABRICKS_ANSWER_ENDPOINT"] = "bw-search-llm"
+os.environ["DATABRICKS_VECTOR_SEARCH_ENDPOINT_NAME"] = "rag-hybrid-endpoint"
+os.environ["DATABRICKS_VECTOR_SEARCH_INDEX_NAME"] = "bw_ai_search.03_gold.gold_rag_company_chunks_index"
+
+# COMMAND ----------
+
 _ensure_ai_src_on_path()
 from retrieval import hybrid_retrieve_top50, rerank_candidates, understand_query  # noqa: E402
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ### 1. Query understanding
 
 # COMMAND ----------
 
-qi = understand_query("UK climate tech companies raising debt in 2024")
+qi = understand_query("UK climate tech companies that raised in 2026")
 print(qi)
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ### 2. Hybrid retrieval (top 50 pool)
 
@@ -72,6 +89,7 @@ for r in cands[:10]:
     )
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ### 3. Rerank
 
