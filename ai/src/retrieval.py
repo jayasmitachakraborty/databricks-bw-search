@@ -11,9 +11,9 @@ Query understanding:
   ↓
 Hybrid retrieval (Databricks Vector Search index)
   ↓
-Top 50 results
+Top-K results (hybrid retrieval per rewrite)
   ↓
-Reranker (LLM or cross-encoder)
+Optional Vector Search reranker, then optional second-stage rerank (endpoint or LLM)
   ↓
 Top 5–10 chunks
   ↓
@@ -26,9 +26,9 @@ import json
 import os
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, Iterable
 
 
 DEFAULT_RESULT_COLUMNS = ("chunk_id", "company_id", "chunk_index", "chunk_text")
@@ -39,7 +39,7 @@ DEFAULT_PARENT_COL = "company_id"
 DEFAULT_REWRITE_MODEL = os.environ.get("DATABRICKS_QUERY_UNDERSTANDING_ENDPOINT") or os.environ.get(
     "DATABRICKS_LLM_ENDPOINT"
 )
-DEFAULT_RERANK_MODEL = os.environ.get( "DATABRICKS_RERANKER_ENDPOINT")
+DEFAULT_RERANK_MODEL = os.environ.get("DATABRICKS_RERANK_ENDPOINT")
 DEFAULT_ANSWER_MODEL = os.environ.get("DATABRICKS_ANSWER_ENDPOINT") or os.environ.get("DATABRICKS_LLM_ENDPOINT")
 
 QUERY_UNDERSTANDING_PROMPT = """You are a query understanding system for a RAG search engine.
@@ -111,16 +111,20 @@ def _load_vector_index_yaml(path: Path | None = None) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _vector_index_section(config_path: Path | str | None) -> dict[str, Any]:
+    cfg = _load_vector_index_yaml(Path(config_path) if config_path else None)
+    vi = cfg.get("vector_index")
+    return vi if isinstance(vi, dict) else {}
+
+
 def _merge_vs_settings(
     *,
     endpoint_name: str | None,
     index_name: str | None,
     config_path: Path | str | None,
+    vi: dict[str, Any] | None = None,
 ) -> tuple[str | None, str | None]:
-    cfg = _load_vector_index_yaml(
-        Path(config_path) if config_path else None
-    )
-    vi = cfg.get("vector_index") if isinstance(cfg.get("vector_index"), dict) else {}
+    vi = vi if vi is not None else _vector_index_section(config_path)
 
     ep = (
         endpoint_name
@@ -139,6 +143,33 @@ def _merge_vs_settings(
     if isinstance(idx, str) and not idx.strip():
         idx = None
     return (ep, idx)
+
+
+def _resolve_vector_search_rerank_columns(
+    rerank_columns: list[str] | None,
+    *,
+    config_path: Path | str | None,
+    vi: dict[str, Any] | None = None,
+) -> list[str] | None:
+    """
+    Columns for Mosaic AI Vector Search built-in reranker (`DatabricksReranker`).
+
+    - ``rerank_columns`` not ``None``: use as-is (empty list = disable built-in reranker).
+    - ``rerank_columns`` is ``None``: read ``DATABRICKS_VS_RERANK_COLUMNS`` (comma-separated)
+      or ``vector_index.rerank_columns`` in ``vector_index.yml``.
+    """
+    if rerank_columns is not None:
+        return list(rerank_columns) if rerank_columns else None
+
+    raw = os.environ.get("DATABRICKS_VS_RERANK_COLUMNS", "").strip()
+    if raw:
+        return [c.strip() for c in raw.split(",") if c.strip()]
+
+    vi = vi if vi is not None else _vector_index_section(config_path)
+    rc = vi.get("rerank_columns")
+    if isinstance(rc, list) and rc:
+        return [str(x).strip() for x in rc if str(x).strip()]
+    return None
 
 
 _SPACE_RE = re.compile(r"\s+")
@@ -492,6 +523,21 @@ def _diversify(
     return out
 
 
+def _rerank_results_from_scores(
+    subset: list[RetrievalResult],
+    scores: list[float],
+    *,
+    rerank_top_k: int,
+) -> list[RetrievalResult]:
+    """Sort ``subset`` by parallel ``scores`` (same length) and return top-``rerank_top_k`` with ranks."""
+    ranked = sorted(
+        (replace(r, score=float(scores[i]), source="rerank") for i, r in enumerate(subset)),
+        key=lambda x: x.score,
+        reverse=True,
+    )
+    return [replace(r, rank=i + 1) for i, r in enumerate(ranked[:rerank_top_k])]
+
+
 def rerank_candidates(
     query: str,
     candidates: list[RetrievalResult],
@@ -535,19 +581,7 @@ def rerank_candidates(
             scores = [float(x) for x in resp]
 
         if len(scores) == len(subset):
-            reranked = [
-                RetrievalResult(
-                    chunk_id=r.chunk_id,
-                    payload=r.payload,
-                    score=float(scores[i]),
-                    source="rerank",
-                    rank=i + 1,
-                )
-                for i, r in enumerate(subset)
-            ]
-            reranked = sorted(reranked, key=lambda x: x.score, reverse=True)
-            reranked = [RetrievalResult(**{**r.__dict__, "rank": i + 1}) for i, r in enumerate(reranked)]
-            return reranked[:rerank_top_k]
+            return _rerank_results_from_scores(subset, scores, rerank_top_k=rerank_top_k)
 
     # LLM fallback scoring
     if DEFAULT_ANSWER_MODEL:
@@ -575,20 +609,8 @@ def rerank_candidates(
         if isinstance(raw_scores, list) and len(raw_scores) == len(subset):
             try:
                 scores = [float(x) for x in raw_scores]
-                reranked = [
-                    RetrievalResult(
-                        chunk_id=r.chunk_id,
-                        payload=r.payload,
-                        score=float(scores[i]),
-                        source="rerank",
-                        rank=i + 1,
-                    )
-                    for i, r in enumerate(subset)
-                ]
-                reranked = sorted(reranked, key=lambda x: x.score, reverse=True)
-                reranked = [RetrievalResult(**{**r.__dict__, "rank": i + 1}) for i, r in enumerate(reranked)]
-                return reranked[:rerank_top_k]
-            except Exception:
+                return _rerank_results_from_scores(subset, scores, rerank_top_k=rerank_top_k)
+            except (TypeError, ValueError):
                 pass
 
     return subset[:rerank_top_k]
@@ -606,6 +628,7 @@ def retrieve(
     embedding_endpoint: str | None = None,
     use_query_vector: bool = False,
     config_path: Path | str | None = None,
+    rerank_columns: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Return top-``top_k`` chunk rows for ``query`` via Databricks Vector Search.
@@ -624,13 +647,22 @@ def retrieve(
     - ``use_query_vector=True``: embed ``query`` with ``embedding.embed_texts`` and call
       ``similarity_search`` with ``query_vector`` (precomputed-embedding indexes).
 
+    **Built-in reranker (Mosaic AI Vector Search)**
+
+    Pass ``rerank_columns`` (or set env ``DATABRICKS_VS_RERANK_COLUMNS`` / YAML
+    ``vector_index.rerank_columns``) to enable ``DatabricksReranker`` on the query.
+    Each column name must appear in the index and is included in reranking context
+    (see Databricks docs: order matters; large text is truncated per column).
+
     Environment (optional): ``DATABRICKS_EMBEDDING_ENDPOINT``, ``EMBED_BATCH_SIZE`` —
     same as ``embedding.embed_texts``.
     """
+    vi_section = _vector_index_section(config_path)
     ep, idx = _merge_vs_settings(
         endpoint_name=endpoint_name,
         index_name=index_name,
         config_path=config_path,
+        vi=vi_section,
     )
     if not idx:
         raise ValueError(
@@ -664,6 +696,20 @@ def retrieve(
     if query_type is not None:
         kwargs["query_type"] = query_type
 
+    vs_rerank_cols = _resolve_vector_search_rerank_columns(
+        rerank_columns, config_path=config_path, vi=vi_section
+    )
+    if vs_rerank_cols:
+        try:
+            from databricks.vector_search.reranker import DatabricksReranker
+        except ImportError as e:
+            raise ImportError(
+                "Built-in Vector Search reranker requires databricks-vectorsearch with "
+                "databricks.vector_search.reranker.DatabricksReranker. "
+                "Upgrade: %pip install -U databricks-vectorsearch"
+            ) from e
+        kwargs["reranker"] = DatabricksReranker(columns_to_rerank=vs_rerank_cols)
+
     if use_query_vector:
         kwargs["query_vector"] = embed_query(query, endpoint=embedding_endpoint)
     else:
@@ -671,6 +717,12 @@ def retrieve(
 
     raw = index.similarity_search(**kwargs)
     return _normalize_similarity_hits(raw)
+
+
+DEFAULT_HYBRID_PER_QUERY_TOP_K = 50
+# Clamp answer context to a small band regardless of rerank_top_k (generation cost vs coverage).
+_MIN_CONTEXT_CHUNKS = 5
+_MAX_CONTEXT_CHUNKS = 10
 
 
 def hybrid_retrieve_top50(
@@ -684,19 +736,26 @@ def hybrid_retrieve_top50(
     use_query_vector: bool = False,
     config_path: Path | str | None = None,
     extra_filters: dict[str, Any] | None = None,
-    per_query_top_k: int = 50,
+    per_query_top_k: int = DEFAULT_HYBRID_PER_QUERY_TOP_K,
+    rerank_columns: list[str] | None = None,
 ) -> list[RetrievalResult]:
     """
     Hybrid retrieval against the Databricks Vector Search index for each rewritten query.
 
     Returns a single deduped ranked list of up to ~ (per_query_top_k * num_queries) candidates,
     sorted by the index-provided score.
+
+    When ``rerank_columns`` / env / YAML enable the Vector Search ``DatabricksReranker``,
+    each ``retrieve`` call returns results already reranked by Mosaic AI Vector Search.
     """
-    merged_filters = dict(extra_filters or {})
-    merged_filters.update(qi.filters or {})
+    merged_filters = {**(extra_filters or {}), **(qi.filters or {})}
+
+    subqueries = qi.rewritten_queries[:5] if qi.rewritten_queries else []
+    if not subqueries and qi.normalized:
+        subqueries = [qi.normalized]
 
     all_rows: list[dict[str, Any]] = []
-    for q in qi.rewritten_queries[:5] if qi.rewritten_queries else [qi.normalized]:
+    for q in subqueries:
         if not q:
             continue
         rows = retrieve(
@@ -710,6 +769,7 @@ def hybrid_retrieve_top50(
             embedding_endpoint=embedding_endpoint,
             use_query_vector=use_query_vector,
             config_path=config_path,
+            rerank_columns=rerank_columns,
         )
         # Preserve which rewrite produced it (useful for debugging)
         for r in rows:
@@ -786,7 +846,10 @@ def rag_pipeline(
     embedding_endpoint: str | None = None,
     use_query_vector: bool = False,
     config_path: Path | str | None = None,
-    # Rerank config
+    hybrid_per_query_top_k: int = DEFAULT_HYBRID_PER_QUERY_TOP_K,
+    vector_search_rerank_columns: list[str] | None = None,
+    # Rerank config (second stage; optional if Vector Search reranker already applied)
+    post_rerank: bool = True,
     rerank_top_n: int = 50,
     rerank_top_k: int = 10,
     rerank_model_endpoint: str | None = None,
@@ -797,7 +860,12 @@ def rag_pipeline(
     answer_model_endpoint: str | None = None,
 ) -> dict[str, Any]:
     """
-    End-to-end pipeline 
+    End-to-end pipeline.
+
+    Enable the Mosaic AI Vector Search built-in reranker by setting
+    ``vector_search_rerank_columns``, or env ``DATABRICKS_VS_RERANK_COLUMNS`` / YAML
+    ``vector_index.rerank_columns``. If you only want that reranker, set
+    ``post_rerank=False`` so the second-stage ``rerank_candidates`` step is skipped.
     """
     qi = understand_query(query)
 
@@ -812,21 +880,28 @@ def rag_pipeline(
         use_query_vector=use_query_vector,
         config_path=config_path,
         extra_filters=filters,
-        per_query_top_k=50,
+        per_query_top_k=hybrid_per_query_top_k,
+        rerank_columns=vector_search_rerank_columns,
     )
 
-    # 2) Rerank and select top 5–10 chunks
-    reranked = rerank_candidates(
-        qi.normalized,
-        candidates,
-        top_n=rerank_top_n,
-        rerank_top_k=rerank_top_k,
-        rerank_model_endpoint=rerank_model_endpoint,
-    )
+    # 2) Optional second-stage rerank (custom endpoint or LLM scoring)
+    if post_rerank:
+        reranked = rerank_candidates(
+            qi.normalized,
+            candidates,
+            top_n=rerank_top_n,
+            rerank_top_k=rerank_top_k,
+            rerank_model_endpoint=rerank_model_endpoint,
+        )
+    else:
+        n = max(1, int(rerank_top_n))
+        k = max(1, int(rerank_top_k))
+        reranked = candidates[:n][:k]
 
     assembled = _collapse_overlaps(reranked, max_per_parent=collapse_per_parent)
     assembled = _diversify(assembled, max_per_parent=max_per_parent)
-    final_chunks = assembled[: max(5, min(10, int(rerank_top_k)))]
+    ctx_cap = max(_MIN_CONTEXT_CHUNKS, min(_MAX_CONTEXT_CHUNKS, int(rerank_top_k)))
+    final_chunks = assembled[:ctx_cap]
 
     # 3) Answer with citations
     answer = answer_with_citations(
@@ -844,7 +919,7 @@ def rag_pipeline(
             "rewritten_queries": qi.rewritten_queries,
             "filters": qi.filters,
         },
-        "candidates_top50": [r.payload for r in candidates[:50]],
+        "candidates_top50": [r.payload for r in candidates[:hybrid_per_query_top_k]],
         "chunks": [r.payload for r in final_chunks],
         "answer": answer,
     }
