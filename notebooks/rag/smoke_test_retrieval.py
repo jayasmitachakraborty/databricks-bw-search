@@ -10,7 +10,7 @@
 # COMMAND ----------
 # MAGIC %pip install -q pyyaml mlflow
 
-# COMMAND ----------
+# COMMAND -----------
 
 dbutils.library.restartPython()
 
