@@ -10,7 +10,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install -q pyyaml mlflow databricks-vectorsearch databricks-sdk
+# MAGIC %pip install -q pyyaml mlflow openai databricks-vectorsearch databricks-sdk
 
 # COMMAND ----------
 

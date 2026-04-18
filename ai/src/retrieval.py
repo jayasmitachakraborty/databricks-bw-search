@@ -22,6 +22,7 @@ LLM answer (with citation)
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -352,10 +353,33 @@ def _databricks_workspace_host() -> str | None:
 
 
 def _databricks_rest_token() -> str | None:
-    for key in ("DATABRICKS_TOKEN", "TOKEN", "DATABRICKS_SERVICE_TOKEN"):
+    for key in ("DATABRICKS_TOKEN", "DATABRICKS_API_TOKEN", "TOKEN", "DATABRICKS_SERVICE_TOKEN"):
         t = os.environ.get(key, "").strip()
         if t:
             return t
+    try:
+        from pyspark.sql import SparkSession
+
+        spark = SparkSession.getActiveSession()
+        if spark:
+            t = (spark.conf.get("spark.databricks.api.token", "") or "").strip()
+            if t:
+                return t
+    except Exception:
+        pass
+    try:
+        from IPython import get_ipython
+
+        ip = get_ipython()
+        if ip is not None:
+            dbutils = ip.user_ns.get("dbutils")
+            if dbutils is not None:
+                ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+                api_tok = ctx.apiToken().get()
+                if api_tok:
+                    return str(api_tok)
+    except Exception:
+        pass
     return None
 
 
@@ -414,6 +438,48 @@ def _text_from_llm_payload(resp: Any) -> str:
     return json.dumps(resp, ensure_ascii=False)
 
 
+def _invoke_chat_via_openai_sdk(
+    endpoint: str,
+    *,
+    messages: list[dict[str, str]],
+    temperature: float,
+) -> dict[str, Any] | None:
+    """
+    Chat completions via the OpenAI client against Databricks serving.
+
+    ``base_url`` must be ``{workspace}/serving-endpoints`` and ``model`` must be the
+    serving endpoint name — this matches the wire format external OpenAI models expect.
+    See: https://learn.microsoft.com/azure/databricks/machine-learning/model-serving/query-chat-models
+    """
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return None
+
+    host = _databricks_workspace_host()
+    token = _databricks_rest_token()
+    if not host or not token:
+        return None
+
+    try:
+        client = OpenAI(api_key=token, base_url=f"{host}/serving-endpoints")
+        msgs = [{"role": str(m.get("role", "user")), "content": str(m["content"])} for m in messages]
+        comp = client.chat.completions.create(
+            model=endpoint,
+            messages=msgs,
+            temperature=float(temperature),
+        )
+        if hasattr(comp, "model_dump"):
+            d = comp.model_dump()
+            return d if isinstance(d, dict) else None
+        if hasattr(comp, "dict"):
+            d = comp.dict()  # type: ignore[no-untyped-call]
+            return d if isinstance(d, dict) else None
+    except Exception:
+        return None
+    return None
+
+
 def _invoke_chat_via_http(
     endpoint: str,
     *,
@@ -433,18 +499,30 @@ def _invoke_chat_via_http(
 
     url = f"{host}/serving-endpoints/{quote(endpoint, safe='')}/invocations"
     payload = {"messages": list(messages), "temperature": float(temperature)}
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        method="POST",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-    )
-    try:
+    body = json.dumps(payload).encode("utf-8")
+
+    def _post(authz: str) -> str:
+        req = urllib.request.Request(
+            url,
+            data=body,
+            method="POST",
+            headers={"Authorization": authz, "Content-Type": "application/json"},
+        )
         with urllib.request.urlopen(req, timeout=180) as r:
-            raw = r.read().decode("utf-8")
+            return r.read().decode("utf-8")
+
+    try:
+        raw = _post(f"Bearer {token}")
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Databricks serving HTTP {e.code} for {endpoint!r}: {detail}") from e
+        if e.code == 401:
+            try:
+                basic = base64.b64encode(f"token:{token}".encode()).decode()
+                raw = _post(f"Basic {basic}")
+            except urllib.error.HTTPError:
+                raise RuntimeError(f"Databricks serving HTTP {e.code} for {endpoint!r}: {detail}") from e
+        else:
+            raise RuntimeError(f"Databricks serving HTTP {e.code} for {endpoint!r}: {detail}") from e
     return json.loads(raw) if raw else {}
 
 
@@ -454,7 +532,7 @@ def _invoke_chat_via_workspace_sdk(
     messages: list[dict[str, str]],
     temperature: float,
 ) -> dict[str, Any] | None:
-    """Use ``databricks.sdk`` ``serving_endpoints.query`` (correct chat schema for external models)."""
+    """Use Databricks SDK data-plane or control-plane ``query`` (chat schema for external models)."""
     try:
         from databricks.sdk import WorkspaceClient
         from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
@@ -475,20 +553,31 @@ def _invoke_chat_via_workspace_sdk(
             )
             for m in messages
         ]
-        q = w.serving_endpoints.query(name=endpoint, messages=msgs, temperature=float(temperature))
+        for api_name in ("serving_endpoints_data_plane", "serving_endpoints"):
+            api = getattr(w, api_name, None)
+            if api is None:
+                continue
+            try:
+                q = api.query(name=endpoint, messages=msgs, temperature=float(temperature))
+            except Exception:
+                continue
+            out = _coerce_llm_response_dict(q)
+            if out:
+                return out
     except Exception:
         return None
-    out = _coerce_llm_response_dict(q)
-    return out if out else None
+    return None
 
 
 def _call_databricks_llm(endpoint: str, *, messages: list[dict[str, str]], temperature: float = 0.0) -> str:
     """
     Call a Databricks chat model serving endpoint.
 
-    Prefer (1) direct REST to ``/serving-endpoints/.../invocations`` with top-level
-    ``messages`` when ``DATABRICKS_HOST`` / ``DATABRICKS_TOKEN`` are set, (2)
-    ``databricks.sdk`` ``serving_endpoints.query``, (3) MLflow deployments ``predict``.
+    Order (unless ``DATABRICKS_LLM_FORCE_MLFLOW``): (1) ``openai`` package with
+    ``base_url={workspace}/serving-endpoints`` and ``model=endpoint`` — correct for
+    external OpenAI-backed endpoints; (2) ``databricks.sdk`` data-plane then control-plane
+    ``query``; (3) raw REST ``/invocations`` with top-level ``messages``; (4) MLflow
+    ``predict`` (legacy; may break external OpenAI routing).
     """
     force_mlflow = os.environ.get("DATABRICKS_LLM_FORCE_MLFLOW", "").strip().lower() in (
         "1",
@@ -497,6 +586,10 @@ def _call_databricks_llm(endpoint: str, *, messages: list[dict[str, str]], tempe
     )
 
     if not force_mlflow:
+        oa = _invoke_chat_via_openai_sdk(endpoint, messages=messages, temperature=temperature)
+        if oa:
+            return _text_from_llm_payload(oa)
+
         sdk_resp = _invoke_chat_via_workspace_sdk(endpoint, messages=messages, temperature=temperature)
         if sdk_resp:
             return _text_from_llm_payload(sdk_resp)
