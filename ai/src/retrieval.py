@@ -26,9 +26,12 @@ import json
 import os
 import re
 import unicodedata
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import quote
 
 
 DEFAULT_RESULT_COLUMNS = ("chunk_id", "company_id", "chunk_index", "chunk_text")
@@ -322,34 +325,84 @@ def _normalize_rewrite_payload(raw: Any) -> tuple[list[str], dict[str, Any]]:
     return ([], {})
 
 
-def _call_databricks_llm(endpoint: str, *, messages: list[dict[str, str]], temperature: float = 0.0) -> str:
-    """
-    Call a Databricks model serving chat endpoint via MLflow deployments client.
+def _spark_databricks_workspace_host() -> str | None:
+    """Resolve workspace URL on Databricks Runtime (driver has Spark)."""
+    try:
+        from pyspark.sql import SparkSession
 
-    This intentionally supports multiple response shapes used by different serving backends.
-    """
-    from mlflow.deployments import get_deploy_client
+        spark = SparkSession.getActiveSession()
+        if spark is None:
+            return None
+        u = (spark.conf.get("spark.databricks.workspaceUrl") or "").strip()
+        if not u:
+            return None
+        if u.startswith("http://") or u.startswith("https://"):
+            return u.rstrip("/")
+        return f"https://{u}".rstrip("/")
+    except Exception:
+        return None
 
-    client = get_deploy_client("databricks")
-    resp = client.predict(endpoint=endpoint, inputs={"messages": messages, "temperature": float(temperature)})
 
-    # Common shapes:
-    # - OpenAI-like: {"choices":[{"message":{"content":"..."}}], ...}
-    # - Predictions: {"predictions":[{"content":"..."}]} or {"predictions":["..."]}
-    # - Data: {"data":[...]}
+def _databricks_workspace_host() -> str | None:
+    for key in ("DATABRICKS_HOST", "DATABRICKS_WORKSPACE_URL"):
+        v = os.environ.get(key, "").strip()
+        if v:
+            return v.rstrip("/") if v.startswith("http") else f"https://{v}".rstrip("/")
+    return _spark_databricks_workspace_host()
+
+
+def _databricks_rest_token() -> str | None:
+    for key in ("DATABRICKS_TOKEN", "TOKEN", "DATABRICKS_SERVICE_TOKEN"):
+        t = os.environ.get(key, "").strip()
+        if t:
+            return t
+    return None
+
+
+def _coerce_llm_response_dict(resp: Any) -> dict[str, Any] | None:
+    if resp is None:
+        return None
     if isinstance(resp, dict):
-        if isinstance(resp.get("choices"), list) and resp["choices"]:
-            msg = resp["choices"][0].get("message") if isinstance(resp["choices"][0], dict) else None
-            if isinstance(msg, dict) and isinstance(msg.get("content"), str):
-                return msg["content"]
-        preds = resp.get("predictions")
+        return resp
+    try:
+        if hasattr(resp, "model_dump"):  # pydantic v2
+            out = resp.model_dump()
+            return out if isinstance(out, dict) else None
+        if hasattr(resp, "dict"):
+            out = resp.dict()  # type: ignore[no-untyped-call]
+            return out if isinstance(out, dict) else None
+        if hasattr(resp, "as_dict"):
+            out = resp.as_dict()
+            return out if isinstance(out, dict) else None
+    except Exception:
+        pass
+    return None
+
+
+def _text_from_llm_payload(resp: Any) -> str:
+    """
+    Normalize serving responses to assistant text.
+
+    Handles OpenAI-like chat completions, predictions arrays, MLflow wrappers, etc.
+    """
+    d = _coerce_llm_response_dict(resp)
+    if isinstance(d, dict):
+        if isinstance(d.get("choices"), list) and d["choices"]:
+            ch0 = d["choices"][0]
+            if isinstance(ch0, dict):
+                msg = ch0.get("message")
+                if isinstance(msg, dict) and isinstance(msg.get("content"), str):
+                    return msg["content"]
+                if isinstance(ch0.get("content"), str):
+                    return ch0["content"]
+        preds = d.get("predictions")
         if isinstance(preds, list) and preds:
             p0 = preds[0]
             if isinstance(p0, dict) and isinstance(p0.get("content"), str):
                 return p0["content"]
             if isinstance(p0, str):
                 return p0
-        data = resp.get("data")
+        data = d.get("data")
         if isinstance(data, list) and data:
             d0 = data[0]
             if isinstance(d0, dict) and isinstance(d0.get("content"), str):
@@ -359,6 +412,109 @@ def _call_databricks_llm(endpoint: str, *, messages: list[dict[str, str]], tempe
     if isinstance(resp, str):
         return resp
     return json.dumps(resp, ensure_ascii=False)
+
+
+def _invoke_chat_via_http(
+    endpoint: str,
+    *,
+    messages: list[dict[str, str]],
+    temperature: float,
+) -> dict[str, Any]:
+    """
+    POST OpenAI-style chat JSON to ``/serving-endpoints/{name}/invocations``.
+
+    External-model endpoints expect top-level ``messages``; some MLflow client versions
+    send a shape the gateway does not forward correctly to OpenAI.
+    """
+    host = _databricks_workspace_host()
+    token = _databricks_rest_token()
+    if not host or not token:
+        raise RuntimeError("missing host or token")
+
+    url = f"{host}/serving-endpoints/{quote(endpoint, safe='')}/invocations"
+    payload = {"messages": list(messages), "temperature": float(temperature)}
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=180) as r:
+            raw = r.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Databricks serving HTTP {e.code} for {endpoint!r}: {detail}") from e
+    return json.loads(raw) if raw else {}
+
+
+def _invoke_chat_via_workspace_sdk(
+    endpoint: str,
+    *,
+    messages: list[dict[str, str]],
+    temperature: float,
+) -> dict[str, Any] | None:
+    """Use ``databricks.sdk`` ``serving_endpoints.query`` (correct chat schema for external models)."""
+    try:
+        from databricks.sdk import WorkspaceClient
+        from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
+    except ImportError:
+        return None
+
+    role_of = {
+        "system": ChatMessageRole.SYSTEM,
+        "user": ChatMessageRole.USER,
+        "assistant": ChatMessageRole.ASSISTANT,
+    }
+    try:
+        w = WorkspaceClient()
+        msgs = [
+            ChatMessage(
+                role=role_of.get(str(m.get("role", "user")).lower(), ChatMessageRole.USER),
+                content=m["content"],
+            )
+            for m in messages
+        ]
+        q = w.serving_endpoints.query(name=endpoint, messages=msgs, temperature=float(temperature))
+    except Exception:
+        return None
+    out = _coerce_llm_response_dict(q)
+    return out if out else None
+
+
+def _call_databricks_llm(endpoint: str, *, messages: list[dict[str, str]], temperature: float = 0.0) -> str:
+    """
+    Call a Databricks chat model serving endpoint.
+
+    Prefer (1) direct REST to ``/serving-endpoints/.../invocations`` with top-level
+    ``messages`` when ``DATABRICKS_HOST`` / ``DATABRICKS_TOKEN`` are set, (2)
+    ``databricks.sdk`` ``serving_endpoints.query``, (3) MLflow deployments ``predict``.
+    """
+    force_mlflow = os.environ.get("DATABRICKS_LLM_FORCE_MLFLOW", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+    if not force_mlflow:
+        sdk_resp = _invoke_chat_via_workspace_sdk(endpoint, messages=messages, temperature=temperature)
+        if sdk_resp:
+            return _text_from_llm_payload(sdk_resp)
+
+        if _databricks_workspace_host() and _databricks_rest_token():
+            try:
+                raw = _invoke_chat_via_http(endpoint, messages=messages, temperature=temperature)
+                return _text_from_llm_payload(raw)
+            except RuntimeError:
+                raise
+            except Exception:
+                pass
+
+    from mlflow.deployments import get_deploy_client
+
+    client = get_deploy_client("databricks")
+    resp = client.predict(endpoint=endpoint, inputs={"messages": messages, "temperature": float(temperature)})
+    return _text_from_llm_payload(resp)
 
 
 def understand_query(query: str) -> QueryInfo:

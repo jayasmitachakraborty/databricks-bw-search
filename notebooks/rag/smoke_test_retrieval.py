@@ -5,12 +5,12 @@
 # MAGIC - Requires Databricks env / endpoints configured for **`ai/src/retrieval.py`** (same as production jobs).
 # MAGIC - Prepends **`ai/src`** so `from retrieval import …` works (via `__file__`, **`REPO_ROOT`**, or cwd).
 # MAGIC - **`pyyaml`** is required for `ai/config/vector_index.yml` to load; without it, set **`DATABRICKS_VECTOR_SEARCH_ENDPOINT_NAME`** and **`DATABRICKS_VECTOR_SEARCH_INDEX_NAME`**.
-# MAGIC - **`mlflow`** is required for Databricks model serving calls (`mlflow.deployments`) used by query understanding, hybrid embedding, and reranking.
+# MAGIC - **`databricks-sdk`** is used first for LLM chat calls (`WorkspaceClient.serving_endpoints.query`); **`mlflow`** is the fallback for embeddings and legacy predict paths.
 # MAGIC - **Direct-access** vector indexes need a **query vector**: set **`vector_index.use_query_vector`** in `ai/config/vector_index.yml` (or **`DATABRICKS_USE_QUERY_VECTOR=true`**) and **`DATABRICKS_EMBEDDING_ENDPOINT`** to your embedding serving endpoint.
 
 # COMMAND ----------
 
-# MAGIC %pip install -q pyyaml mlflow databricks-vectorsearch
+# MAGIC %pip install -q pyyaml mlflow databricks-vectorsearch databricks-sdk
 
 # COMMAND ----------
 
