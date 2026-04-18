@@ -9,9 +9,10 @@
 # MAGIC - **Direct-access** vector indexes need a **query vector**: set **`vector_index.use_query_vector`** in `ai/config/vector_index.yml` (or **`DATABRICKS_USE_QUERY_VECTOR=true`**) and **`DATABRICKS_EMBEDDING_ENDPOINT`** to your embedding serving endpoint.
 
 # COMMAND ----------
-# MAGIC %pip install -q pyyaml mlflow
 
-# COMMAND -----------
+# MAGIC %pip install -q pyyaml mlflow databricks-vectorsearch
+
+# COMMAND ----------
 
 dbutils.library.restartPython()
 
