@@ -14,6 +14,8 @@ tables:
 vector_index:
   endpoint_name: rag-hybrid-endpoint
   index_name: bw_ai_search.03_gold.gold_rag_company_chunks_index
+  # True for direct-access / precomputed-embedding indexes (must pass query_vector; see retrieval.retrieve).
+  use_query_vector: true
   # Optional: Mosaic AI Vector Search built-in reranker (DatabricksReranker); columns must be requested in retrieval.
   # rerank_columns:
   #   - chunk_text

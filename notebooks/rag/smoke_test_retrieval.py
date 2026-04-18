@@ -6,6 +6,7 @@
 # MAGIC - Prepends **`ai/src`** so `from retrieval import …` works (via `__file__`, **`REPO_ROOT`**, or cwd).
 # MAGIC - **`pyyaml`** is required for `ai/config/vector_index.yml` to load; without it, set **`DATABRICKS_VECTOR_SEARCH_ENDPOINT_NAME`** and **`DATABRICKS_VECTOR_SEARCH_INDEX_NAME`**.
 # MAGIC - **`mlflow`** is required for Databricks model serving calls (`mlflow.deployments`) used by query understanding, hybrid embedding, and reranking.
+# MAGIC - **Direct-access** vector indexes need a **query vector**: set **`vector_index.use_query_vector`** in `ai/config/vector_index.yml` (or **`DATABRICKS_USE_QUERY_VECTOR=true`**) and **`DATABRICKS_EMBEDDING_ENDPOINT`** to your embedding serving endpoint.
 
 # COMMAND ----------
 # MAGIC %pip install -q pyyaml mlflow
@@ -53,6 +54,7 @@ os.environ["DATABRICKS_LLM_ENDPOINT"] = "bw-search-llm"
 os.environ["DATABRICKS_ANSWER_ENDPOINT"] = "bw-search-llm"
 os.environ["DATABRICKS_VECTOR_SEARCH_ENDPOINT_NAME"] = "rag-hybrid-endpoint"
 os.environ["DATABRICKS_VECTOR_SEARCH_INDEX_NAME"] = "bw_ai_search.03_gold.gold_rag_company_chunks_index"
+os.environ["DATABRICKS_EMBEDDING_ENDPOINT"] = "databricks-bge-large-en"
 
 # COMMAND ----------
 

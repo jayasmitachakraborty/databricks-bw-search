@@ -172,6 +172,45 @@ def _resolve_vector_search_rerank_columns(
     return None
 
 
+def _env_truthy(name: str) -> bool | None:
+    raw = os.environ.get(name, "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
+def _resolve_use_query_vector(
+    explicit: bool | None,
+    *,
+    config_path: Path | str | None,
+    vi: dict[str, Any] | None = None,
+) -> bool:
+    """
+    Whether to embed the query client-side and pass ``query_vector`` (vs ``query_text``).
+
+    Resolution order: explicit arg → ``DATABRICKS_USE_QUERY_VECTOR`` →
+    ``vector_index.use_query_vector`` in YAML → default ``False``.
+    """
+    if explicit is not None:
+        return bool(explicit)
+    ev = _env_truthy("DATABRICKS_USE_QUERY_VECTOR")
+    if ev is not None:
+        return ev
+    vi = vi if vi is not None else _vector_index_section(config_path)
+    v = vi.get("use_query_vector")
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in ("1", "true", "yes", "on"):
+            return True
+        if s in ("0", "false", "no", "off"):
+            return False
+    return False
+
+
 _SPACE_RE = re.compile(r"\s+")
 
 
@@ -626,7 +665,7 @@ def retrieve(
     query_type: str | None = None,
     filters: dict[str, Any] | None = None,
     embedding_endpoint: str | None = None,
-    use_query_vector: bool = False,
+    use_query_vector: bool | None = None,
     config_path: Path | str | None = None,
     rerank_columns: list[str] | None = None,
 ) -> list[dict[str, Any]]:
@@ -645,7 +684,9 @@ def retrieve(
 
     - Default: ``query_text=query`` (Delta Sync index with model endpoint, or hybrid).
     - ``use_query_vector=True``: embed ``query`` with ``embedding.embed_texts`` and call
-      ``similarity_search`` with ``query_vector`` (precomputed-embedding indexes).
+      ``similarity_search`` with ``query_vector`` (precomputed-embedding / direct-access indexes).
+      When ``use_query_vector`` is omitted, it is resolved from ``DATABRICKS_USE_QUERY_VECTOR``
+      or ``vector_index.use_query_vector`` in ``ai/config/vector_index.yml`` (else ``False``).
 
     **Built-in reranker (Mosaic AI Vector Search)**
 
@@ -658,6 +699,7 @@ def retrieve(
     same as ``embedding.embed_texts``.
     """
     vi_section = _vector_index_section(config_path)
+    use_qv = _resolve_use_query_vector(use_query_vector, config_path=config_path, vi=vi_section)
     ep, idx = _merge_vs_settings(
         endpoint_name=endpoint_name,
         index_name=index_name,
@@ -710,7 +752,7 @@ def retrieve(
             ) from e
         kwargs["reranker"] = DatabricksReranker(columns_to_rerank=vs_rerank_cols)
 
-    if use_query_vector:
+    if use_qv:
         kwargs["query_vector"] = embed_query(query, endpoint=embedding_endpoint)
     else:
         kwargs["query_text"] = query
@@ -733,7 +775,7 @@ def hybrid_retrieve_top50(
     columns: list[str] | None = None,
     query_type: str | None = None,
     embedding_endpoint: str | None = None,
-    use_query_vector: bool = False,
+    use_query_vector: bool | None = None,
     config_path: Path | str | None = None,
     extra_filters: dict[str, Any] | None = None,
     per_query_top_k: int = DEFAULT_HYBRID_PER_QUERY_TOP_K,
@@ -844,7 +886,7 @@ def rag_pipeline(
     query_type: str | None = None,
     filters: dict[str, Any] | None = None,
     embedding_endpoint: str | None = None,
-    use_query_vector: bool = False,
+    use_query_vector: bool | None = None,
     config_path: Path | str | None = None,
     hybrid_per_query_top_k: int = DEFAULT_HYBRID_PER_QUERY_TOP_K,
     vector_search_rerank_columns: list[str] | None = None,
