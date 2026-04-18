@@ -45,14 +45,21 @@ def embed_texts(
 
     Uses ``mlflow.deployments.get_deploy_client("databricks").predict``.
 
-    Environment (optional):
-        DATABRICKS_EMBEDDING_ENDPOINT — default endpoint name if ``endpoint`` is omitted.
+    Environment:
+        DATABRICKS_EMBEDDING_ENDPOINT — required if ``endpoint`` is omitted (your workspace
+        Model Serving embedding endpoint name).
+
         EMBED_BATCH_SIZE — max texts per predict call (default 32).
     """
     if not texts:
         return []
 
-    ep = endpoint or os.environ.get("DATABRICKS_EMBEDDING_ENDPOINT", "databricks-bge-large-en")
+    ep = (endpoint or os.environ.get("DATABRICKS_EMBEDDING_ENDPOINT") or "").strip()
+    if not ep:
+        raise ValueError(
+            "Embedding endpoint is not configured. Set DATABRICKS_EMBEDDING_ENDPOINT to your "
+            "workspace Model Serving endpoint name, or pass endpoint=... to embed_texts()."
+        )
     bs = batch_size if batch_size is not None else int(os.environ.get("EMBED_BATCH_SIZE", "32"))
 
     from mlflow.deployments import get_deploy_client

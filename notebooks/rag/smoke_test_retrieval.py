@@ -55,7 +55,9 @@ os.environ["DATABRICKS_LLM_ENDPOINT"] = "bw-search-llm"
 os.environ["DATABRICKS_ANSWER_ENDPOINT"] = "bw-search-llm"
 os.environ["DATABRICKS_VECTOR_SEARCH_ENDPOINT_NAME"] = "rag-hybrid-endpoint"
 os.environ["DATABRICKS_VECTOR_SEARCH_INDEX_NAME"] = "bw_ai_search.03_gold.gold_rag_company_chunks_index"
-os.environ["DATABRICKS_EMBEDDING_ENDPOINT"] = "databricks-bge-large-en"
+# Query vectors: set `embedding.endpoint` in ai/config/vector_index.yml, or cluster env
+# DATABRICKS_EMBEDDING_ENDPOINT, or uncomment:
+# os.environ["DATABRICKS_EMBEDDING_ENDPOINT"] = "<your-serving-endpoint-name>"
 
 # COMMAND ----------
 

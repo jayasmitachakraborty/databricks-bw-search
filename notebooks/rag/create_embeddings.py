@@ -38,7 +38,7 @@ def _get_param(name: str, default: str) -> str:
     return default
 
 
-EMBEDDING_ENDPOINT = _get_param("DATABRICKS_EMBEDDING_ENDPOINT", "databricks-bge-large-en")
+EMBEDDING_ENDPOINT = _get_param("DATABRICKS_EMBEDDING_ENDPOINT", "")
 EMBED_BATCH_SIZE = int(_get_param("EMBED_BATCH_SIZE", "32"))
 # More partitions = smaller Arrow batches per worker (reduces Python OOM on large chunk tables).
 EMBED_NUM_PARTITIONS = int(_get_param("EMBED_NUM_PARTITIONS", "32"))
@@ -104,6 +104,12 @@ def _embed_texts_batches(texts: list[str], endpoint: str, batch_size: int) -> li
 
 
 def main() -> None:
+    if not str(EMBEDDING_ENDPOINT).strip():
+        raise RuntimeError(
+            "DATABRICKS_EMBEDDING_ENDPOINT is not set. In this notebook add a widget or set "
+            "the cluster/job env var to your Model Serving embedding endpoint name."
+        )
+
     spark.sql(f"USE CATALOG {CATALOG}")
     spark.sql(f"USE SCHEMA `{SCHEMA}`")
 

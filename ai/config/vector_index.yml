@@ -1,8 +1,8 @@
 # Embeddings + vector search (adjust for your workspace).
 
 embedding:
-  # Model serving endpoint name (Foundation Model API / custom embedding endpoint).
-  endpoint: databricks-bge-large-en
+  # Model Serving endpoint name in *this* workspace (must match vectors stored in the index).
+  endpoint: ""
   batch_size: 32
 
 tables:

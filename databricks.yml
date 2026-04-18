@@ -35,7 +35,7 @@ vector_search:
 
 model_serving_endpoints:
   # Embeddings (used by `ai/src/embedding.py` and `notebooks/rag/create_embeddings.py`)
-  embedding: databricks-bge-large-en
+  embedding: ""
 
   # Query understanding (rewrite + metafilters) used by `ai/src/retrieval.py`
   query_understanding: ""

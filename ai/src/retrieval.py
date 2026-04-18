@@ -211,6 +211,33 @@ def _resolve_use_query_vector(
     return False
 
 
+def _embedding_endpoint_from_config(config_path: Path | str | None) -> str | None:
+    cfg = _load_vector_index_yaml(Path(config_path) if config_path else None)
+    if not isinstance(cfg, dict):
+        return None
+    emb = cfg.get("embedding")
+    if isinstance(emb, dict):
+        ep = emb.get("endpoint")
+        if isinstance(ep, str):
+            s = ep.strip()
+            return s if s else None
+    return None
+
+
+def _resolve_embedding_endpoint(
+    explicit: str | None,
+    *,
+    config_path: Path | str | None,
+) -> str | None:
+    """Serving endpoint name for ``embed_query`` / ``embedding.embed_texts``."""
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+    env = os.environ.get("DATABRICKS_EMBEDDING_ENDPOINT", "").strip()
+    if env:
+        return env
+    return _embedding_endpoint_from_config(config_path)
+
+
 _SPACE_RE = re.compile(r"\s+")
 
 
@@ -696,7 +723,9 @@ def retrieve(
     (see Databricks docs: order matters; large text is truncated per column).
 
     Environment (optional): ``DATABRICKS_EMBEDDING_ENDPOINT``, ``EMBED_BATCH_SIZE`` —
-    same as ``embedding.embed_texts``.
+    same as ``embedding.embed_texts``. When ``use_query_vector`` resolves to true, the
+    embedding endpoint is resolved from (in order): ``embedding_endpoint`` argument,
+    ``DATABRICKS_EMBEDDING_ENDPOINT``, ``embedding.endpoint`` in ``ai/config/vector_index.yml``.
     """
     vi_section = _vector_index_section(config_path)
     use_qv = _resolve_use_query_vector(use_query_vector, config_path=config_path, vi=vi_section)
@@ -753,7 +782,15 @@ def retrieve(
         kwargs["reranker"] = DatabricksReranker(columns_to_rerank=vs_rerank_cols)
 
     if use_qv:
-        kwargs["query_vector"] = embed_query(query, endpoint=embedding_endpoint)
+        ep_embed = _resolve_embedding_endpoint(embedding_endpoint, config_path=config_path)
+        if not ep_embed:
+            raise ValueError(
+                "Query-vector retrieval requires a Model Serving embedding endpoint. Set "
+                "DATABRICKS_EMBEDDING_ENDPOINT, pass embedding_endpoint=..., or set "
+                "embedding.endpoint in ai/config/vector_index.yml to an endpoint that exists "
+                "in this workspace (Serving → Endpoints)."
+            )
+        kwargs["query_vector"] = embed_query(query, endpoint=ep_embed)
     else:
         kwargs["query_text"] = query
 
