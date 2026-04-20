@@ -1,4 +1,7 @@
-create or replace table bw_ai_search.03_gold.gold_rag_company_chunks as
+create or replace table bw_ai_search.03_gold.gold_rag_company_chunks
+using delta
+tblproperties ('delta.enableChangeDataFeed' = 'true')
+as
 
 with verticals_agg as (
     select
@@ -155,5 +158,4 @@ left join keywords_agg k
 left join investors_agg i
   on m.deal_id = i.deal_id
 
-where coalesce(m._fivetran_deleted, false) = false
-TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true');
+where coalesce(m._fivetran_deleted, false) = false;
