@@ -358,16 +358,6 @@ def _databricks_rest_token() -> str | None:
         if t:
             return t
     try:
-        from pyspark.sql import SparkSession
-
-        spark = SparkSession.getActiveSession()
-        if spark:
-            t = (spark.conf.get("spark.databricks.api.token", "") or "").strip()
-            if t:
-                return t
-    except Exception:
-        pass
-    try:
         from IPython import get_ipython
 
         ip = get_ipython()
@@ -378,6 +368,19 @@ def _databricks_rest_token() -> str | None:
                 api_tok = ctx.apiToken().get()
                 if api_tok:
                     return str(api_tok)
+    except Exception:
+        pass
+    # On Databricks Runtime with classic Spark, the API token may be available via Spark conf.
+    # However, on Spark Connect this can trigger a gRPC config fetch that errors and is noisy.
+    # So we only attempt Spark conf as a last resort.
+    try:
+        from pyspark.sql import SparkSession
+
+        spark = SparkSession.getActiveSession()
+        if spark:
+            t = (spark.conf.get("spark.databricks.api.token", "") or "").strip()
+            if t:
+                return t
     except Exception:
         pass
     return None
@@ -1000,7 +1003,9 @@ def retrieve(
             "On a cluster: %pip install databricks-vectorsearch"
         ) from e
 
-    client = VectorSearchClient()
+    # Suppress noisy "notebook authentication token" notices in notebooks.
+    # (Auth behavior is unchanged; this only disables the warning spam.)
+    client = VectorSearchClient(disable_notice=True)
     if ep:
         index = client.get_index(endpoint_name=ep, index_name=idx)
     else:

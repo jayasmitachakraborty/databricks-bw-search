@@ -17,7 +17,8 @@ vector_index:
   # Must match SIZE(embedding) on the gold source table and create_vector_index / VECTOR_SEARCH_EMBEDDING_DIMENSION.
   embedding_dimension: 1536
   # True for direct-access / precomputed-embedding indexes (must pass query_vector; see retrieval.retrieve).
-  use_query_vector: true
+  # For Delta Sync indexes (like this repo’s default), keep this false so queries use query_text (hybrid-ready).
+  use_query_vector: false
   # Optional: Mosaic AI Vector Search built-in reranker (DatabricksReranker); columns must be requested in retrieval.
   # rerank_columns:
   #   - chunk_text
