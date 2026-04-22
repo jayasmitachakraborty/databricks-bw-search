@@ -548,7 +548,7 @@ def _invoke_chat_via_workspace_sdk(
         "assistant": ChatMessageRole.ASSISTANT,
     }
     try:
-        w = WorkspaceClient()
+        w = WorkspaceClient(disable_notice=True)
         msgs = [
             ChatMessage(
                 role=role_of.get(str(m.get("role", "user")).lower(), ChatMessageRole.USER),
@@ -1107,28 +1107,36 @@ def hybrid_retrieve_top50(
     if not subqueries and qi.normalized:
         subqueries = [qi.normalized]
 
-    all_rows: list[dict[str, Any]] = []
-    for q in subqueries:
-        if not q:
-            continue
-        rows = retrieve(
-            q,
-            top_k=int(per_query_top_k),
-            index_name=index_name,
-            endpoint_name=endpoint_name,
-            columns=columns,
-            query_type=query_type,
-            filters=merged_filters or None,
-            embedding_endpoint=embedding_endpoint,
-            use_query_vector=use_query_vector,
-            config_path=config_path,
-            rerank_columns=rerank_columns,
-        )
-        # Preserve which rewrite produced it (useful for debugging)
-        for r in rows:
-            if isinstance(r, dict):
-                r.setdefault("_rewrite_query", q)
-        all_rows.extend(rows)
+    def _run(filters: dict[str, Any] | None) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for q in subqueries:
+            if not q:
+                continue
+            rows = retrieve(
+                q,
+                top_k=int(per_query_top_k),
+                index_name=index_name,
+                endpoint_name=endpoint_name,
+                columns=columns,
+                query_type=query_type,
+                filters=filters or None,
+                embedding_endpoint=embedding_endpoint,
+                use_query_vector=use_query_vector,
+                config_path=config_path,
+                rerank_columns=rerank_columns,
+            )
+            for r in rows:
+                if isinstance(r, dict):
+                    r.setdefault("_rewrite_query", q)
+                    if filters:
+                        r.setdefault("_filters_applied", dict(filters))
+            out.extend(rows)
+        return out
+
+    # First try with filters; if that yields nothing, retry once without filters.
+    all_rows = _run(merged_filters or None)
+    if not all_rows and (merged_filters or extra_filters):
+        all_rows = _run(None)
 
     results = _as_retrieval_results(all_rows, source="hybrid")
     results = _dedupe_by_id_keep_best(results, prefer_source="hybrid")
