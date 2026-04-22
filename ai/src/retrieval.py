@@ -1035,21 +1035,41 @@ def retrieve(
             ) from e
         kwargs["reranker"] = DatabricksReranker(columns_to_rerank=vs_rerank_cols)
 
-    if use_qv:
+    def _needs_query_vector(err: BaseException) -> bool:
+        msg = str(err).lower()
+        return (
+            "query vector must be specified" in msg
+            or "direct access index" in msg
+            or "without a model serving endpoint" in msg
+        )
+
+    def _add_query_vector() -> None:
         ep_embed = _resolve_embedding_endpoint(embedding_endpoint, config_path=config_path)
         if not ep_embed:
             raise ValueError(
-                "Query-vector retrieval requires a Model Serving embedding endpoint. Set "
-                "DATABRICKS_EMBEDDING_ENDPOINT, pass embedding_endpoint=..., or set "
-                "embedding.endpoint in ai/config/vector_index.yml to an endpoint that exists "
-                "in this workspace (Serving → Endpoints)."
+                "This Vector Search index requires query_vector, but no embedding endpoint is configured. "
+                "Set DATABRICKS_EMBEDDING_ENDPOINT, pass embedding_endpoint=..., or set embedding.endpoint "
+                "in ai/config/vector_index.yml."
             )
+        kwargs.pop("query_text", None)
         kwargs["query_vector"] = embed_query(query, endpoint=ep_embed)
+
+    if use_qv:
+        _add_query_vector()
     else:
         kwargs["query_text"] = query
 
-    raw = index.similarity_search(**kwargs)
-    return _normalize_similarity_hits(raw)
+    try:
+        raw = index.similarity_search(**kwargs)
+        return _normalize_similarity_hits(raw)
+    except Exception as e:
+        # If the index is direct-access (no embedding endpoint attached), Vector Search requires query_vector.
+        # Auto-retry with a client-side embedded query to reduce configuration footguns.
+        if not use_qv and _needs_query_vector(e):
+            _add_query_vector()
+            raw = index.similarity_search(**kwargs)
+            return _normalize_similarity_hits(raw)
+        raise
 
 
 DEFAULT_HYBRID_PER_QUERY_TOP_K = 50

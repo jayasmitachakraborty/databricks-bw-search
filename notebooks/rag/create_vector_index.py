@@ -70,7 +70,7 @@ INDEX_NAME = _derive_index_fqn(
 PIPELINE_TYPE = _get_param("VECTOR_SEARCH_PIPELINE_TYPE", "TRIGGERED")
 EMBEDDING_DIMENSION = _get_param_int("VECTOR_SEARCH_EMBEDDING_DIMENSION", 1536)
 
-client = VectorSearchClient()
+client = VectorSearchClient(disable_notice=True)
 
 if client.index_exists(endpoint_name=ENDPOINT_NAME, index_name=INDEX_NAME):
     print(f"Vector Search index already exists; using {INDEX_NAME!r} on endpoint {ENDPOINT_NAME!r}.")

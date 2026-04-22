@@ -47,7 +47,7 @@ def _emit_failure(exc: BaseException) -> None:
 
 
 def _run() -> str:
-    client = VectorSearchClient()
+    client = VectorSearchClient(disable_notice=True)
 
     if client.endpoint_exists(ENDPOINT_NAME):
         detail = f"endpoint_exists name={ENDPOINT_NAME!r}"
