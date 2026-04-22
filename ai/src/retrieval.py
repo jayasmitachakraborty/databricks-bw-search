@@ -692,19 +692,36 @@ def _normalize_similarity_hits(raw: Any) -> list[dict[str, Any]]:
     if not isinstance(raw, dict):
         return []
 
-    # Common SDK shapes: { "result": { "data_array": [...] } } or flat list under "data"
+    # Current Vector Search responses commonly look like:
+    # {
+    #   "manifest": {"columns": [{"name": "..."}, ...]},
+    #   "result": {"data_array": [[...], ...]}
+    # }
+    # Older callers may still surface ``result.columns`` / ``column_names``.
     result = raw.get("result", raw)
     if isinstance(result, list):
         return _normalize_similarity_hits(result)
+    if not isinstance(result, dict):
+        return []
 
+    manifest = raw.get("manifest") if isinstance(raw.get("manifest"), dict) else {}
     data_array = result.get("data_array")
-    columns = result.get("columns") or result.get("column_names")
+    columns = result.get("columns") or result.get("column_names") or manifest.get("columns")
     if isinstance(data_array, list) and isinstance(columns, list) and columns:
+        column_names: list[str] = []
+        for col in columns:
+            if isinstance(col, str):
+                column_names.append(col)
+            elif isinstance(col, dict) and col.get("name"):
+                column_names.append(str(col["name"]))
+            else:
+                column_names.append(str(col))
+
         rows: list[dict[str, Any]] = []
         for tup in data_array:
             if not isinstance(tup, (list, tuple)):
                 continue
-            rows.append({str(columns[i]): tup[i] for i in range(min(len(columns), len(tup)))})
+            rows.append({column_names[i]: tup[i] for i in range(min(len(column_names), len(tup)))})
         return rows
 
     # Single "rows" or "data" list of dicts
@@ -1084,7 +1101,7 @@ def hybrid_retrieve_top50(
     index_name: str | None = None,
     endpoint_name: str | None = None,
     columns: list[str] | None = None,
-    query_type: str | None = None,
+    query_type: str | None = "HYBRID",
     embedding_endpoint: str | None = None,
     use_query_vector: bool | None = None,
     config_path: Path | str | None = None,
