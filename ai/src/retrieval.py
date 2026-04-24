@@ -1035,8 +1035,10 @@ def retrieve(
     }
     if filters is not None:
         kwargs["filters"] = filters
-    if query_type is not None:
-        kwargs["query_type"] = query_type
+
+    normalized_query_type = str(query_type).strip().upper() if query_type is not None else None
+    if normalized_query_type:
+        kwargs["query_type"] = normalized_query_type
 
     vs_rerank_cols = _resolve_vector_search_rerank_columns(
         rerank_columns, config_path=config_path, vi=vi_section
@@ -1060,6 +1062,8 @@ def retrieve(
             or "without a model serving endpoint" in msg
         )
 
+    requires_query_text = normalized_query_type in {"HYBRID", "FULL_TEXT"}
+
     def _add_query_vector() -> None:
         ep_embed = _resolve_embedding_endpoint(embedding_endpoint, config_path=config_path)
         if not ep_embed:
@@ -1068,13 +1072,19 @@ def retrieve(
                 "Set DATABRICKS_EMBEDDING_ENDPOINT, pass embedding_endpoint=..., or set embedding.endpoint "
                 "in ai/config/vector_index.yml."
             )
-        kwargs.pop("query_text", None)
+        if requires_query_text:
+            kwargs["query_text"] = query
+        else:
+            kwargs.pop("query_text", None)
         kwargs["query_vector"] = embed_query(query, endpoint=ep_embed)
 
-    if use_qv:
-        _add_query_vector()
-    else:
+    if requires_query_text:
         kwargs["query_text"] = query
+    elif not use_qv:
+        kwargs["query_text"] = query
+
+    if use_qv and normalized_query_type != "FULL_TEXT":
+        _add_query_vector()
 
     try:
         raw = index.similarity_search(**kwargs)
@@ -1082,7 +1092,7 @@ def retrieve(
     except Exception as e:
         # If the index is direct-access (no embedding endpoint attached), Vector Search requires query_vector.
         # Auto-retry with a client-side embedded query to reduce configuration footguns.
-        if not use_qv and _needs_query_vector(e):
+        if not use_qv and _needs_query_vector(e) and normalized_query_type != "FULL_TEXT":
             _add_query_vector()
             raw = index.similarity_search(**kwargs)
             return _normalize_similarity_hits(raw)
