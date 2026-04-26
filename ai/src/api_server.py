@@ -22,22 +22,25 @@ if str(_ROOT) not in sys.path:
 from company_search import run_company_table_search  # noqa: E402
 from fastapi import FastAPI, HTTPException  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
 app = FastAPI(title="Built World Search API", version="0.1.0")
 
-_raw_origins = os.environ.get("CORS_ALLOW_ORIGINS", "*").strip()
-_cors_origins: list[str] = (
-    [o.strip() for o in _raw_origins.split(",") if o.strip()] if _raw_origins != "*" else ["*"]
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+_raw_origins = os.environ.get("CORS_ALLOW_ORIGINS", "").strip()
+if _raw_origins:
+    _cors_origins: list[str] = (
+        [o.strip() for o in _raw_origins.split(",") if o.strip()]
+        if _raw_origins != "*"
+        else ["*"]
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 class SearchRequest(BaseModel):
@@ -58,3 +61,11 @@ def post_search(body: SearchRequest) -> dict:
         return run_company_table_search(q)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# If a built UI is present (copied into `./static/` by CI), serve it from the same
+# origin as the API so the browser can use relative `fetch('/api/...')` without CORS.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_STATIC_DIR = _REPO_ROOT / "static"
+if _STATIC_DIR.exists():
+    app.mount("/", StaticFiles(directory=str(_STATIC_DIR), html=True), name="ui")
