@@ -1246,6 +1246,7 @@ def rag_pipeline(
     max_per_parent: int = 3,
     # Answer config
     answer_model_endpoint: str | None = None,
+    skip_answer: bool = False,
 ) -> dict[str, Any]:
     """
     End-to-end pipeline.
@@ -1254,6 +1255,8 @@ def rag_pipeline(
     ``vector_search_rerank_columns``, or env ``DATABRICKS_VS_RERANK_COLUMNS`` / YAML
     ``vector_index.rerank_columns``. If you only want that reranker, set
     ``post_rerank=False`` so the second-stage ``rerank_candidates`` step is skipped.
+
+    If ``skip_answer`` is true, the LLM answer step is skipped (e.g. table-only API responses).
     """
     qi = understand_query(query)
 
@@ -1292,11 +1295,14 @@ def rag_pipeline(
     final_chunks = assembled[:ctx_cap]
 
     # 3) Answer with citations
-    answer = answer_with_citations(
-        qi.normalized,
-        [r.payload for r in final_chunks],
-        answer_model_endpoint=answer_model_endpoint,
-    )
+    if skip_answer:
+        answer = ""
+    else:
+        answer = answer_with_citations(
+            qi.normalized,
+            [r.payload for r in final_chunks],
+            answer_model_endpoint=answer_model_endpoint,
+        )
 
     return {
         "query_info": {
