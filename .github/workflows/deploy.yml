@@ -36,10 +36,14 @@ jobs:
         with:
           node-version: 24
 
-      - name: Build UI (npm ci + npm run build)
+      - name: Build UI (npm ci if lockfile exists)
         working-directory: _ui
         run: |
-          npm ci
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
           npm run build
 
       - name: Copy UI dist into backend ./static
