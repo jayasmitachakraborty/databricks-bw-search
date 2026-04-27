@@ -1,3 +1,12 @@
+# Frontend repo is cloned at runtime (not stored in this repo). Configure in GitHub:
+#   Settings → Secrets and variables → Actions
+#   - UI_REPO           required  e.g. myorg/my-frontend (same form as github.com/myorg/my-frontend)
+#   - UI_REF            optional  branch/tag/commit; omit to default to main (see checkout ref below)
+#   - UI_PACKAGE_PATH   optional  if package.json is not at repo root, e.g. apps/web
+#   - UI_REPO_TOKEN     optional  PAT with repo read access if UI_REPO is private (otherwise checkout uses GITHUB_TOKEN)
+#
+# Databricks: DATABRICKS_HOST, DATABRICKS_TOKEN (same page).
+
 name: Deploy Databricks Bundle
 
 on:
@@ -19,64 +28,77 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      DATABRICKS_BUNDLE_ENV: ${{ github.event.inputs.target || 'dev' }}
 
     steps:
-      - name: Checkout
+      - name: Checkout backend bundle
         uses: actions/checkout@v4
 
-      - name: Checkout UI repo into ./_ui
+      - name: Checkout frontend repo
         uses: actions/checkout@v4
         with:
           repository: ${{ secrets.UI_REPO }}
           ref: ${{ secrets.UI_REF || 'main' }}
           path: _ui
+          token: ${{ secrets.UI_REPO_TOKEN || github.token }}
 
-      - name: Resolve UI package root (monorepo-friendly)
+      - name: Resolve UI package directory
+        env:
+          UI_PACKAGE_PATH: ${{ secrets.UI_PACKAGE_PATH }}
         run: |
           set -euo pipefail
+          if [ -n "${UI_PACKAGE_PATH}" ]; then
+            root="_ui/${UI_PACKAGE_PATH}"
+            root="${root%/}"
+            if [ ! -f "${root}/package.json" ]; then
+              echo "::error::UI_PACKAGE_PATH is set but ${root}/package.json not found." >&2
+              ls -la "${root}" 2>/dev/null || ls -la _ui >&2 || true
+              exit 1
+            fi
+            echo "UI_ROOT=${root}" >> "$GITHUB_ENV"
+            exit 0
+          fi
           if [ -f _ui/package.json ]; then
             echo "UI_ROOT=_ui" >> "$GITHUB_ENV"
             exit 0
           fi
           mapfile -t pkgs < <(find _ui -maxdepth 4 -name package.json -not -path '*/node_modules/*' 2>/dev/null | sort)
           if [ "${#pkgs[@]}" -eq 0 ]; then
-            echo "::error::No package.json found under _ui after UI checkout. Check secrets UI_REPO / UI_REF and repo layout." >&2
-            echo "Top-level under _ui:" >&2
+            echo "::error::No package.json under _ui. Set Actions secret UI_REPO (and optional UI_REF, UI_PACKAGE_PATH)." >&2
             ls -la _ui >&2 || true
             exit 1
           fi
           if [ "${#pkgs[@]}" -eq 1 ]; then
-            pkg="${pkgs[0]}"
-            dir="$(dirname "$pkg")"
-            echo "UI_ROOT=$dir" >> "$GITHUB_ENV"
+            echo "UI_ROOT=$(dirname "${pkgs[0]}")" >> "$GITHUB_ENV"
             exit 0
           fi
-          echo "::error::Multiple package.json files under _ui; set a single UI root or narrow the checkout (found ${#pkgs[@]})." >&2
+          echo "::error::Multiple package.json files under _ui; set secret UI_PACKAGE_PATH to the app folder." >&2
           printf '%s\n' "${pkgs[@]}" >&2
           exit 1
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 24
 
-      - name: Build UI (npm ci if lockfile exists)
+      - name: Install and build frontend
         working-directory: ${{ env.UI_ROOT }}
         run: |
-          if [ -f package-lock.json ]; then
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
             npm ci
           else
             npm install --no-audit --no-fund
           fi
           npm run build
 
-      - name: Copy UI dist into backend ./static
+      - name: Copy frontend build into static/
         run: |
           rm -rf static
           mkdir -p static
           cp -R "${UI_ROOT}/dist/." static/
 
-      - name: Setup Databricks CLI
+      - name: Install Databricks CLI
         uses: databricks/setup-cli@v0.296.0
 
       - name: Validate bundle
@@ -84,12 +106,9 @@ jobs:
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-          DATABRICKS_BUNDLE_ENV: ${{ github.event.inputs.target || 'dev' }}
 
       - name: Deploy bundle
         run: databricks bundle deploy
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-          DATABRICKS_BUNDLE_ENV: ${{ github.event.inputs.target || 'dev' }}
-
