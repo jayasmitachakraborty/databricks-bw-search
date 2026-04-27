@@ -1,51 +1,27 @@
-# Databricks workspace configuration (non-secret).
+# Databricks Asset Bundle configuration.
 #
-# This file is meant to centralize the *names* of Databricks resources used by this repo
-# (Unity Catalog tables, Vector Search resources, and Model Serving endpoints).
+# UC table names, vector search, and model endpoints for the Python app are maintained in:
+#   - ai/config/vector_index.yml
+#   - ai/config/embedding_sources.yml
+# See also .env.example for environment variables.
 #
-# Do NOT put secrets (tokens) here. Use `.env` / secret scopes for credentials.
+# Do NOT put secrets here. Use `.env` / secret scopes for credentials.
 
 bundle:
   name: databricks-bw-search
 
-# Asset bundle fragments (jobs, pipelines, etc.) — see `resources/`
+# Jobs and other bundle resources — see `resources/`
 include:
   - resources/*.yml
 
-workspace: 
+# GitHub Actions sets DATABRICKS_BUNDLE_ENV=dev (see .github/workflows/deploy.yml).
+targets:
+  dev:
+    default: true
+
+workspace:
   # Optional identifiers (useful for humans and tooling).
   # host: https://<your-workspace-url>
   # profile: DEFAULT
   host: ""
   profile: ""
-
-unity_catalog:
-  # Default catalog/schema used by the pipelines in `docs/architecture.md`.
-  catalog: bw_ai_search
-  silver_schema: 02_silver
-  gold_schema: 03_gold
-
-tables:
-  chunks: bw_ai_search.02_silver.bw_company_text_chunks
-  embeddings: bw_ai_search.02_silver.bw_company_text_chunk_embeddings
-
-vector_search:
-  endpoint_name: ""
-  index_name: ""
-
-model_serving_endpoints:
-  # Embeddings (used by `ai/src/embedding.py` and `notebooks/rag/create_embeddings.py`)
-  embedding: ""
-
-  # Query understanding (rewrite + metafilters) used by `ai/src/retrieval.py`
-  query_understanding: ""
-
-  # Default chat model fallback used by `ai/src/retrieval.py`
-  llm: ""
-
-  # Answer generation used by `ai/src/retrieval.py`
-  answer: ""
-
-  # Optional cross-encoder reranker used by `ai/src/retrieval.py`
-  rerank: ""
-
