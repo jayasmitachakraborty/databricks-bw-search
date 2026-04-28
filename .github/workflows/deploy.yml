@@ -106,7 +106,9 @@ jobs:
           cp -R "${UI_ROOT}/dist/." static/
 
       - name: Install Databricks CLI
-        uses: databricks/setup-cli@v0.296.0
+        # v0.296.0 can fail downloading Terraform due to HashiCorp's expired signing key.
+        # Keep this pinned to a patched setup-cli release.
+        uses: databricks/setup-cli@v0.296.1
 
       - name: Debug Databricks auth env (safe)
         shell: bash
