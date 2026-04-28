@@ -28,6 +28,9 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Attach the job to a GitHub Environment so Environment secrets are available.
+    # For pushes (no inputs), this defaults to "dev".
+    environment: ${{ github.event.inputs.target || 'dev' }}
     env:
       DATABRICKS_BUNDLE_ENV: ${{ github.event.inputs.target || 'dev' }}
 
@@ -100,6 +103,23 @@ jobs:
 
       - name: Install Databricks CLI
         uses: databricks/setup-cli@v0.296.0
+
+      - name: Debug Databricks auth env (safe)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${DATABRICKS_HOST:-}" ]; then
+            echo "DATABRICKS_HOST is set"
+          else
+            echo "::error::DATABRICKS_HOST is empty (secret not injected). Check job.environment and Environment secret names."
+            exit 1
+          fi
+          if [ -n "${DATABRICKS_TOKEN:-}" ]; then
+            echo "DATABRICKS_TOKEN is set"
+          else
+            echo "::error::DATABRICKS_TOKEN is empty (secret not injected). Check job.environment and Environment secret names."
+            exit 1
+          fi
 
       - name: Validate bundle
         run: databricks bundle validate
