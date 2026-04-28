@@ -33,6 +33,10 @@ jobs:
     environment: ${{ github.event.inputs.target || 'dev' }}
     env:
       DATABRICKS_BUNDLE_ENV: ${{ github.event.inputs.target || 'dev' }}
+      # DATABRICKS_HOST is commonly stored as an Environment *variable* (non-secret),
+      # while DATABRICKS_TOKEN should be stored as an Environment *secret*.
+      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
 
     steps:
       - name: Checkout backend bundle
@@ -111,24 +115,18 @@ jobs:
           if [ -n "${DATABRICKS_HOST:-}" ]; then
             echo "DATABRICKS_HOST is set"
           else
-            echo "::error::DATABRICKS_HOST is empty (secret not injected). Check job.environment and Environment secret names."
+            echo "::error::DATABRICKS_HOST is empty. If you stored it as an Environment variable, ensure it's named DATABRICKS_HOST (Environment → Variables)."
             exit 1
           fi
           if [ -n "${DATABRICKS_TOKEN:-}" ]; then
             echo "DATABRICKS_TOKEN is set"
           else
-            echo "::error::DATABRICKS_TOKEN is empty (secret not injected). Check job.environment and Environment secret names."
+            echo "::error::DATABRICKS_TOKEN is empty. Ensure it's stored as an Environment secret named DATABRICKS_TOKEN (Environment → Secrets)."
             exit 1
           fi
 
       - name: Validate bundle
         run: databricks bundle validate
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
 
       - name: Deploy bundle
         run: databricks bundle deploy
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
