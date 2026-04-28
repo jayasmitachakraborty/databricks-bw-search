@@ -37,6 +37,9 @@ jobs:
       # while DATABRICKS_TOKEN should be stored as an Environment *secret*.
       DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      # Bundle variables (passed through to ${var.*} in databricks.yml/resources).
+      # Set this as a GitHub Environment variable on the matching Environment (e.g. dev).
+      DATABRICKS_BUNDLE_VAR_sql_warehouse_id: ${{ vars.DATABRICKS_BUNDLE_VAR_sql_warehouse_id }}
 
     steps:
       - name: Checkout backend bundle
