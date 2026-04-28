@@ -8,13 +8,13 @@ resources:
             file:
               path: /Workspace/Users/jayasmita@noavc.com/databricks-bw-search/silver/sql/02_silver/bw_combine_all_investors.sql
               source: WORKSPACE
-            warehouse_id: 2ed857904977e888
+            warehouse_id: ${var.sql_warehouse_id}
         - task_key: bronze_to_silver_investor_ranking
           sql_task:
             file:
               path: /Workspace/Users/jayasmita@noavc.com/databricks-bw-search/silver/sql/02_silver/bw_search_silver_ranked_investors.sql
               source: WORKSPACE
-            warehouse_id: 2ed857904977e888
+            warehouse_id: ${var.sql_warehouse_id}
         - task_key: bronze_to_silver_semantic_text_table_creation
           depends_on:
             - task_key: bronze_to_silver_combine_all_investors
@@ -44,7 +44,7 @@ resources:
             file:
               path: /Workspace/Users/jayasmita@noavc.com/databricks-bw-search/gold/sql/bw_search_create_gold_rag_table.sql
               source: WORKSPACE
-            warehouse_id: 2ed857904977e888
+            warehouse_id: ${var.sql_warehouse_id}
       git_source:
         git_url: https://github.com/jayasmitachakraborty/databricks-bw-search.git
         git_provider: gitHub
