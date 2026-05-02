@@ -142,7 +142,7 @@ jobs:
           fi
           echo "Checking SQL warehouse exists and is accessible..."
           # This does not print secrets; it only confirms the warehouse is visible with this host+token.
-          databricks sql warehouses get --warehouse-id "${SQL_WAREHOUSE_ID}" >/dev/null
+          databricks warehouses get "${SQL_WAREHOUSE_ID}" >/dev/null
           echo "SQL warehouse is accessible"
 
       - name: Validate bundle
