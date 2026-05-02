@@ -130,6 +130,9 @@ jobs:
             exit 1
           fi
 
+      # Warehouse IDs are workspace-scoped. If the UI shows the warehouse but this step fails with
+      # "does not exist", DATABRICKS_HOST usually does not match the workspace URL in your browser
+      # (AWS/GCP/Azure hostnames differ), or the token is for another workspace/principal.
       - name: Debug SQL Warehouse access (safe)
         shell: bash
         env:
@@ -140,10 +143,30 @@ jobs:
             echo "No SQL warehouse id provided via DATABRICKS_BUNDLE_VAR_sql_warehouse_id; skipping warehouse check."
             exit 0
           fi
+          # Trim accidental whitespace/newlines from the GitHub variable value.
+          SQL_WAREHOUSE_ID="$(printf '%s' "${SQL_WAREHOUSE_ID}" | tr -d '[:space:]')"
           echo "Checking SQL warehouse exists and is accessible..."
-          # This does not print secrets; it only confirms the warehouse is visible with this host+token.
-          databricks warehouses get "${SQL_WAREHOUSE_ID}" >/dev/null
-          echo "SQL warehouse is accessible"
+          echo "DATABRICKS_HOST=${DATABRICKS_HOST}"
+          echo "Authenticated identity (from token):"
+          databricks current-user me
+          if databricks warehouses get "${SQL_WAREHOUSE_ID}" >/dev/null 2>&1; then
+            echo "SQL warehouse is accessible"
+            exit 0
+          fi
+          echo "::error::Could not load SQL warehouse id=${SQL_WAREHOUSE_ID}. Compare DATABRICKS_HOST above to your workspace URL (same scheme + hostname only). Repo vs Environment variables: confirm the GitHub Environment (e.g. dev) has the same workspace host as where you see this warehouse in the UI."
+          echo "Warehouses returned by list for this token (often only those you can manage):"
+          databricks warehouses list -o json 2>/dev/null | python3 -c "
+          import json, sys
+          try:
+              r = json.load(sys.stdin)
+              rows = r if isinstance(r, list) else r.get('warehouses', [])
+              ids = [x.get('id') for x in rows if isinstance(x, dict)]
+              print('list_count=', len(ids))
+              print('sample_ids=', ids[:15])
+          except Exception as e:
+              print('list_parse_failed:', e)
+          " || true
+          exit 1
 
       - name: Validate bundle
         run: databricks bundle validate
