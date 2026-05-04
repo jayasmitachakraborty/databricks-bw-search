@@ -1,11 +1,10 @@
-# Frontend repo is cloned at runtime (not stored in this repo). Configure in GitHub:
-#   Settings → Secrets and variables → Actions
-#   - UI_REPO           required  e.g. myorg/my-frontend (same form as github.com/myorg/my-frontend)
-#   - UI_REF            optional  branch/tag/commit; omit to default to main (see checkout ref below)
-#   - UI_PACKAGE_PATH   optional  if package.json is not at repo root, e.g. apps/web
-#   - UI_REPO_TOKEN     optional  PAT with repo read access if UI_REPO is private (otherwise checkout uses GITHUB_TOKEN)
-#
-# Databricks: DATABRICKS_HOST, DATABRICKS_TOKEN (same page).
+# Frontend is cloned at runtime. GitHub → Settings → Secrets and variables → Actions:
+#   UI_REPO           (secret)   e.g. myorg/my-frontend
+#   UI_REF            (secret)   branch/tag/commit; empty → main
+#   UI_PACKAGE_PATH   (secret)   optional subdir if package.json is not at repo root
+#   UI_REPO_TOKEN     (secret)   PAT for private UI_REPO (omit to use GITHUB_TOKEN)
+# Databricks (often Environment-scoped): DATABRICKS_HOST (variable), DATABRICKS_TOKEN (secret),
+#   DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID (variable) — SQL warehouse UUID for resources/job.yml sql_task.
 
 name: Deploy Databricks Bundle
 
@@ -28,18 +27,13 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Attach the job to a GitHub Environment so Environment secrets are available.
-    # For pushes (no inputs), this defaults to "dev".
+    # Binds to a GitHub Environment so Environment variables/secrets (e.g. DATABRICKS_*) apply.
     environment: ${{ github.event.inputs.target || 'dev' }}
     env:
       DATABRICKS_BUNDLE_ENV: ${{ github.event.inputs.target || 'dev' }}
-      # DATABRICKS_HOST is commonly stored as an Environment *variable* (non-secret),
-      # while DATABRICKS_TOKEN should be stored as an Environment *secret*.
       DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-      # Bundle variables (passed through to ${var.*} in databricks.yml/resources).
-      # Set this as a GitHub Environment variable on the matching Environment (e.g. dev).
-      DATABRICKS_BUNDLE_VAR_sql_warehouse_id: ${{ vars.DATABRICKS_BUNDLE_VAR_sql_warehouse_id }}
+      DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID: ${{ vars.DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID }}
 
     steps:
       - name: Checkout backend bundle
@@ -95,6 +89,7 @@ jobs:
       - name: Install and build frontend
         working-directory: ${{ env.UI_ROOT }}
         run: |
+          set -euo pipefail
           if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
             npm ci
           else
@@ -104,69 +99,25 @@ jobs:
 
       - name: Copy frontend build into static/
         run: |
+          set -euo pipefail
           rm -rf static
           mkdir -p static
           cp -R "${UI_ROOT}/dist/." static/
 
       - name: Install Databricks CLI
-        # v0.296.0 can fail downloading Terraform due to HashiCorp's expired signing key.
-        # Keep this pinned to a patched setup-cli release.
+        # Pin: some setup-cli releases can break Terraform download (e.g. signing key rotation).
         uses: databricks/setup-cli@v0.296.1
 
-      - name: Debug Databricks auth env (safe)
-        shell: bash
+      # Empty warehouse id surfaces as " is not a valid endpoint id" during bundle deploy (sql_task warehouse_id).
+      - name: Require SQL warehouse bundle variable
         run: |
           set -euo pipefail
-          if [ -n "${DATABRICKS_HOST:-}" ]; then
-            echo "DATABRICKS_HOST is set"
-          else
-            echo "::error::DATABRICKS_HOST is empty. If you stored it as an Environment variable, ensure it's named DATABRICKS_HOST (Environment → Variables)."
+          wid="${DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID:-}"
+          wid="$(printf '%s' "$wid" | tr -d '[:space:]')"
+          if [ -z "$wid" ]; then
+            echo "::error::Set GitHub Environment variable DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID to your Databricks SQL warehouse ID (SQL Warehouses → open warehouse → ID in URL or sidebar). It maps to bundle variable SQL_WAREHOUSE_ID in resources/job.yml."
             exit 1
           fi
-          if [ -n "${DATABRICKS_TOKEN:-}" ]; then
-            echo "DATABRICKS_TOKEN is set"
-          else
-            echo "::error::DATABRICKS_TOKEN is empty. Ensure it's stored as an Environment secret named DATABRICKS_TOKEN (Environment → Secrets)."
-            exit 1
-          fi
-
-      # Warehouse IDs are workspace-scoped. If the UI shows the warehouse but this step fails with
-      # "does not exist", DATABRICKS_HOST usually does not match the workspace URL in your browser
-      # (AWS/GCP/Azure hostnames differ), or the token is for another workspace/principal.
-      - name: Debug SQL Warehouse access (safe)
-        shell: bash
-        env:
-          SQL_WAREHOUSE_ID: ${{ vars.DATABRICKS_BUNDLE_VAR_sql_warehouse_id || '' }}
-        run: |
-          set -euo pipefail
-          if [ -z "${SQL_WAREHOUSE_ID}" ]; then
-            echo "No SQL warehouse id provided via DATABRICKS_BUNDLE_VAR_sql_warehouse_id; skipping warehouse check."
-            exit 0
-          fi
-          # Trim accidental whitespace/newlines from the GitHub variable value.
-          SQL_WAREHOUSE_ID="$(printf '%s' "${SQL_WAREHOUSE_ID}" | tr -d '[:space:]')"
-          echo "Checking SQL warehouse exists and is accessible..."
-          echo "DATABRICKS_HOST=${DATABRICKS_HOST}"
-          echo "Authenticated identity (from token):"
-          databricks current-user me
-          if databricks warehouses get "${SQL_WAREHOUSE_ID}" >/dev/null 2>&1; then
-            echo "SQL warehouse is accessible"
-            exit 0
-          fi
-          echo "::error::Could not load SQL warehouse id=${SQL_WAREHOUSE_ID}. Compare DATABRICKS_HOST above to your workspace URL (same scheme + hostname only). Repo vs Environment variables: confirm the GitHub Environment (e.g. dev) has the same workspace host as where you see this warehouse in the UI."
-          echo "Warehouses returned by list for this token (often only those you can manage):"
-          databricks warehouses list -o json 2>/dev/null | python3 -c "
-          import json, sys
-          try:
-              r = json.load(sys.stdin)
-              rows = r if isinstance(r, list) else r.get('warehouses', [])
-              ids = [x.get('id') for x in rows if isinstance(x, dict)]
-              print('list_count=', len(ids))
-              print('sample_ids=', ids[:15])
-          except Exception as e:
-              print('list_parse_failed:', e)
-          " || true
-          exit 1
 
       - name: Validate bundle
         run: databricks bundle validate

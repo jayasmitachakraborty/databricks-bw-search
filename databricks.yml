@@ -16,7 +16,7 @@ include:
 
 # Bundle variables (set per target/environment).
 variables:
-  sql_warehouse_id:
+  SQL_WAREHOUSE_ID:
     description: "SQL Warehouse ID for sql_task tasks (see resources/job.yml)."
     default: ""
 
