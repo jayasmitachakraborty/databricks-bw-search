@@ -4,7 +4,7 @@
 #   UI_PACKAGE_PATH   (secret)   optional subdir if package.json is not at repo root
 #   UI_REPO_TOKEN     (secret)   PAT for private UI_REPO (omit to use GITHUB_TOKEN)
 # Databricks (often Environment-scoped): DATABRICKS_HOST (variable), DATABRICKS_TOKEN (secret),
-#   DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID (variable) — SQL warehouse UUID for resources/job.yml sql_task.
+#   DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID (variable) — SQL warehouse UUID (we export it to BUNDLE_VAR_SQL_WAREHOUSE_ID for Bundles).
 
 name: Deploy Databricks Bundle
 
@@ -33,7 +33,9 @@ jobs:
       DATABRICKS_BUNDLE_ENV: ${{ github.event.inputs.target || 'dev' }}
       DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-      DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID: ${{ vars.DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID }}
+      # Databricks Bundles reads custom variables from environment variables prefixed with BUNDLE_VAR_.
+      # Keep the GitHub Environment variable name as-is, but export it using the correct prefix.
+      BUNDLE_VAR_SQL_WAREHOUSE_ID: ${{ vars.DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID }}
 
     steps:
       - name: Checkout backend bundle
@@ -112,10 +114,10 @@ jobs:
       - name: Require SQL warehouse bundle variable
         run: |
           set -euo pipefail
-          wid="${DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID:-}"
+          wid="${BUNDLE_VAR_SQL_WAREHOUSE_ID:-}"
           wid="$(printf '%s' "$wid" | tr -d '[:space:]')"
           if [ -z "$wid" ]; then
-            echo "::error::Set GitHub Environment variable DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID to your Databricks SQL warehouse ID (SQL Warehouses → open warehouse → ID in URL or sidebar). It maps to bundle variable SQL_WAREHOUSE_ID in resources/job.yml."
+            echo "::error::Set GitHub Environment variable DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID to your Databricks SQL warehouse ID (SQL Warehouses → open warehouse → ID in URL or sidebar). The workflow exports it to BUNDLE_VAR_SQL_WAREHOUSE_ID which Bundles maps to SQL_WAREHOUSE_ID in resources/job.yml."
             exit 1
           fi
 
