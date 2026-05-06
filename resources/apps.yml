@@ -1,0 +1,11 @@
+# Databricks App: FastAPI server + optional static UI (see ai/src/api_server.py, app.yml).
+#
+# source_code_path: .  → deploy from the bundle-synced workspace copy of this repo (includes
+# ./static/ after CI builds the frontend). Do not set git_repository / git_source here unless
+# you intentionally want the app to pull code from Git instead of this upload.
+resources:
+  apps:
+    bw_search:
+      name: bw-search
+      description: Built World search API and UI
+      source_code_path: .

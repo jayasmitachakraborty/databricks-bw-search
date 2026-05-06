@@ -1,4 +1,6 @@
-# Optional: local HTTP API for the search UI (see ai/src/api_server.py).
+# Python dependencies for the HTTP API (FastAPI + uvicorn). Canonical list used by:
+#   - local runs: pip install -r requirements-api.txt (see ai/src/api_server.py)
+#   - Databricks Apps: via requirements.txt, which includes this file
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 pydantic>=2.0.0

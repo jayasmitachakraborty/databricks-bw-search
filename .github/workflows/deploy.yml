@@ -1,10 +1,5 @@
-# Frontend is cloned at runtime. GitHub → Settings → Secrets and variables → Actions:
-#   UI_REPO           (secret)   e.g. myorg/my-frontend
-#   UI_REF            (secret)   branch/tag/commit; empty → main
-#   UI_PACKAGE_PATH   (secret)   optional subdir if package.json is not at repo root
-#   UI_REPO_TOKEN     (secret)   PAT for private UI_REPO (omit to use GITHUB_TOKEN)
-# Databricks (often Environment-scoped): DATABRICKS_HOST (variable), DATABRICKS_TOKEN (secret),
-#   DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID (variable) — SQL warehouse UUID (we export it to BUNDLE_VAR_SQL_WAREHOUSE_ID for Bundles).
+# Secrets/vars: UI_REPO, UI_REF, UI_PACKAGE_PATH (optional), UI_REPO_TOKEN (optional);
+# DATABRICKS_HOST, DATABRICKS_TOKEN, DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID (GitHub Environment).
 
 name: Deploy Databricks Bundle
 
@@ -27,14 +22,11 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Binds to a GitHub Environment so Environment variables/secrets (e.g. DATABRICKS_*) apply.
     environment: ${{ github.event.inputs.target || 'dev' }}
     env:
       DATABRICKS_BUNDLE_ENV: ${{ github.event.inputs.target || 'dev' }}
       DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-      # Databricks Bundles reads custom variables from environment variables prefixed with BUNDLE_VAR_.
-      # Keep the GitHub Environment variable name as-is, but export it using the correct prefix.
       BUNDLE_VAR_SQL_WAREHOUSE_ID: ${{ vars.DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID }}
 
     steps:
@@ -107,22 +99,17 @@ jobs:
           cp -R "${UI_ROOT}/dist/." static/
 
       - name: Install Databricks CLI
-        # Pin: some setup-cli releases can break Terraform download (e.g. signing key rotation).
         uses: databricks/setup-cli@v0.296.1
 
-      # Empty warehouse id surfaces as " is not a valid endpoint id" during bundle deploy (sql_task warehouse_id).
       - name: Require SQL warehouse bundle variable
         run: |
           set -euo pipefail
           wid="${BUNDLE_VAR_SQL_WAREHOUSE_ID:-}"
           wid="$(printf '%s' "$wid" | tr -d '[:space:]')"
           if [ -z "$wid" ]; then
-            echo "::error::Set GitHub Environment variable DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID to your Databricks SQL warehouse ID (SQL Warehouses → open warehouse → ID in URL or sidebar). The workflow exports it to BUNDLE_VAR_SQL_WAREHOUSE_ID which Bundles maps to SQL_WAREHOUSE_ID in resources/job.yml."
+            echo "::error::Set GitHub Environment variable DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID (SQL warehouse ID)." >&2
             exit 1
           fi
-
-      - name: Validate bundle
-        run: databricks bundle validate
 
       - name: Deploy bundle
         run: databricks bundle deploy

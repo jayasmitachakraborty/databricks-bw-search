@@ -1,0 +1,3 @@
+# Entry point for Databricks Apps: the deploy step runs `pip install -r requirements.txt`
+# from the app root. Actual package pins live in requirements-api.txt (included below).
+-r requirements-api.txt

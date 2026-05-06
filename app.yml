@@ -1,0 +1,19 @@
+command:
+  - uvicorn
+  - api_server:app
+  - --host
+  - 0.0.0.0
+  - --port
+  - ${DATABRICKS_APP_PORT}
+  - --app-dir
+  - ai/src
+
+env:
+  - name: PYTHONPATH
+    value: ai/src
+  - name: DATABRICKS_VECTOR_SEARCH_ENDPOINT_NAME
+    value: rag-hybrid-endpoint
+  - name: DATABRICKS_VECTOR_SEARCH_INDEX_NAME
+    value: bw_ai_search.03_gold.gold_rag_company_chunks_index
+  - name: DATABRICKS_LLM_ENDPOINT
+    value: bw-search-llm
