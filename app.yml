@@ -1,10 +1,7 @@
+# Bind address/port come from UVICORN_HOST / UVICORN_PORT (set by Databricks Apps).
 command:
   - uvicorn
   - api_server:app
-  - --host
-  - 0.0.0.0
-  - --port
-  - ${DATABRICKS_APP_PORT}
   - --app-dir
   - ai/src
 
