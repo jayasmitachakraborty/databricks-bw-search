@@ -24,10 +24,10 @@ variables:
 targets:
   dev:
     default: true
-    variables:
-      # Databricks bundle variables can be provided via env vars with the
-      # DATABRICKS_BUNDLE_VAR_ prefix. We mirror CI and read the value from there.
-      SQL_WAREHOUSE_ID: ${env.DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID}
+    # Override `variables:` here only when you want a checked-in default for this
+    # target. Otherwise, prefer setting `SQL_WAREHOUSE_ID` at deploy time via:
+    #   DATABRICKS_BUNDLE_VAR_SQL_WAREHOUSE_ID="<warehouse-id>"
+    # which Databricks Asset Bundles will automatically map to `var.SQL_WAREHOUSE_ID`.
 
 workspace:
   # Optional identifiers (useful for humans and tooling).
