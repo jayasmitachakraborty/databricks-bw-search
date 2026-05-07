@@ -49,7 +49,26 @@ class SearchRequest(BaseModel):
 
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
-    return {"status": "ok"}
+    vs_status = "unknown"
+    try:
+        import importlib.metadata as importlib_metadata  # py3.8+
+
+        try:
+            from databricks.vector_search.client import VectorSearchClient as _VSC  # noqa: F401
+
+            vs_ver = ""
+            try:
+                vs_ver = importlib_metadata.version("databricks-vectorsearch")
+            except Exception:
+                vs_ver = ""
+            vs_status = f"ok{(' ' + vs_ver) if vs_ver else ''}"
+        except Exception as e:
+            vs_status = f"import_error: {type(e).__name__}: {e}"
+    except Exception as e:
+        # Extremely defensive: health endpoint should never 500 due to diagnostics.
+        vs_status = f"diagnostic_error: {type(e).__name__}: {e}"
+
+    return {"status": "ok", "databricks_vectorsearch": vs_status}
 
 
 @app.post("/api/search")
